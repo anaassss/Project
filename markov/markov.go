@@ -276,6 +276,9 @@ func (m *Model) TopWords(n int) []string { return mostCommon(m.words, n) }
 // TopNumbers returns up to n learned numbers, most common first.
 func (m *Model) TopNumbers(n int) []string { return mostCommon(m.numbers, n) }
 
+// Vocabulary reports how many distinct words and numbers the model learned.
+func (m *Model) Vocabulary() (words, numbers int) { return len(m.words), len(m.numbers) }
+
 func mostCommon(counts map[string]uint32, n int) []string {
 	keys := make([]string, 0, len(counts))
 	for k := range counts {

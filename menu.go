@@ -17,6 +17,8 @@ import (
 const menuText = `
   1 - Training
   2 - Edit
+  3 - Model info
+  4 - Clear all knowledge
   0 - Exit
 `
 
@@ -55,10 +57,14 @@ func menu(in io.Reader, out io.Writer, modelPath string) error {
 			err = s.train()
 		case "2":
 			err = s.edit()
+		case "3":
+			err = s.info()
+		case "4":
+			err = s.clear()
 		case "0", "q", "exit", "quit":
 			return nil
 		default:
-			fmt.Fprintln(out, "Choose 1, 2 or 0.")
+			fmt.Fprintln(out, "Choose 1, 2, 3, 4 or 0.")
 			continue
 		}
 		if errors.Is(err, io.EOF) {
@@ -89,17 +95,26 @@ func (s *session) train() error {
 	return nil
 }
 
-func (s *session) edit() error {
+// model loads the model if needed. It reports false, after telling the
+// user, if nothing has been learned yet.
+func (s *session) model() (bool, error) {
 	if s.m == nil {
 		m, err := loadModel(s.modelPath)
 		if errors.Is(err, errNoModel) {
 			fmt.Fprintln(s.out, "Nothing learned yet. Choose 1 - Training first.")
-			return nil
+			return false, nil
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
 		s.m = m
+	}
+	return true, nil
+}
+
+func (s *session) edit() error {
+	if ok, err := s.model(); !ok {
+		return err
 	}
 	path, err := s.askPath("File: ")
 	if err != nil {
@@ -110,6 +125,35 @@ func (s *session) edit() error {
 		return err
 	}
 	fmt.Fprintln(s.out, summary)
+	return nil
+}
+
+func (s *session) info() error {
+	if ok, err := s.model(); !ok {
+		return err
+	}
+	describeModel(s.out, s.modelPath, s.m)
+	return nil
+}
+
+func (s *session) clear() error {
+	if ok, err := s.model(); !ok {
+		return err
+	}
+	answer, err := s.ask(fmt.Sprintf("This erases everything learned (%s usernames) and cannot be undone. Type yes to confirm: ",
+		formatCount(int(s.m.Stats().Names))))
+	if err != nil {
+		return err
+	}
+	if strings.ToLower(answer) != "yes" {
+		fmt.Fprintln(s.out, "Nothing cleared.")
+		return nil
+	}
+	if err := clearModel(s.modelPath); err != nil {
+		return err
+	}
+	s.m = nil
+	fmt.Fprintln(s.out, "All knowledge cleared.")
 	return nil
 }
 

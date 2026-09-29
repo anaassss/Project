@@ -12,6 +12,8 @@ go build -o usergen .
 ```
   1 - Training
   2 - Edit
+  3 - Model info
+  4 - Clear all knowledge
   0 - Exit
 > 1
 File: names.txt
@@ -22,6 +24,17 @@ Learned 1,001,559 new usernames in 1.5s (skipped 898,193 already known, 100,248 
 File: mine.txt
 Editing  [██████████████████████████████] 100%
 Saved 6,224,124 edited usernames to edited_6224124.txt in 5s
+
+> 3
+  Model file   usergen.model (8.7 MB)
+  Usernames    1,001,559 learned, 6-24 characters (average 12.9)
+  Patterns     105,964, using 3 characters of context
+  Words        228; most common: xx, man, code, owl, star, shadow, starter, sneaky, titan, ghostly
+  Numbers      106; most common: 69, 88, 99, 53, 22, 26, 74, 77, 27, 72
+
+> 4
+This erases everything learned (1,001,559 usernames) and cannot be undone. Type yes to confirm: yes
+All knowledge cleared.
 ```
 
 1. **Training** learns from a file of usernames (one per line) and saves what
@@ -29,6 +42,10 @@ Saved 6,224,124 edited usernames to edited_6224124.txt in 5s
    starting over.
 2. **Edit** turns every username in a file into up to 10 new ones and saves
    them to `edited_<count>.txt`.
+3. **Model info** shows what the model has learned: how many usernames,
+   patterns, words and numbers, and the most common ones.
+4. **Clear all knowledge** deletes the model after you type `yes`, so the
+   next training starts from nothing.
 
 ## Speed
 

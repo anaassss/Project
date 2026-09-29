@@ -145,14 +145,7 @@ func stats(args []string) error {
 	if err != nil {
 		return err
 	}
-	s := m.Stats()
-	fmt.Printf("model:     %s\n", *modelPath)
-	fmt.Printf("order:     %d characters of context\n", m.Order())
-	fmt.Printf("usernames: %s learned\n", formatCount(int(s.Names)))
-	fmt.Printf("patterns:  %s distinct\n", formatCount(m.Patterns()))
-	if s.Names > 0 {
-		fmt.Printf("length:    %d-%d characters, average %.1f\n", s.MinLen, s.MaxLen, float64(s.TotalLen)/float64(s.Names))
-	}
+	describeModel(os.Stdout, *modelPath, m)
 	return nil
 }
 

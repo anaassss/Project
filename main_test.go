@@ -93,7 +93,7 @@ func TestMenuSurvivesErrorsAndEOF(t *testing.T) {
 	if err := menu(strings.NewReader("1\nmissing.txt\n7\n"), &out, "model"); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); !strings.Contains(got, "Error: stat missing.txt") || !strings.Contains(got, "Choose 1, 2 or 0.") {
+	if got := out.String(); !strings.Contains(got, "Error: stat missing.txt") || !strings.Contains(got, "Choose 1, 2, 3, 4 or 0.") {
 		t.Errorf("unexpected output:\n%s", got)
 	}
 }
@@ -139,5 +139,66 @@ func TestFormatCount(t *testing.T) {
 		if got := formatCount(n); got != want {
 			t.Errorf("formatCount(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+func TestMenuInfoAndClear(t *testing.T) {
+	t.Chdir(t.TempDir())
+	train, err := os.ReadFile(filepath.Join(repoRoot, "examples", "usernames.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, "names.txt", string(train))
+	writeFile(t, legacyModel, `{"version":1,"order":3,"names":["OldName"]}`)
+
+	input := strings.Join([]string{
+		"1", "names.txt", // train (loads the old model, saves the new one)
+		"3",       // info
+		"4", "no", // clear, refused
+		"4", "YES", // clear, confirmed
+		"3", // info: nothing left
+		"2", // edit: nothing left
+		"0",
+	}, "\n") + "\n"
+	var out strings.Builder
+	if err := menu(strings.NewReader(input), &out, defaultModel); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"Model file   usergen.model (",
+		"Usernames    156 learned, 3-15 characters",
+		"Words        ",
+		"most common: wolf,",
+		"(156 usernames) and cannot be undone",
+		"Nothing cleared.",
+		"All knowledge cleared.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("menu output missing %q:\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "Nothing learned yet"); n != 2 {
+		t.Errorf("after clearing, %d choices said nothing is learned, want 2:\n%s", n, got)
+	}
+	for _, f := range []string{defaultModel, legacyModel} {
+		if _, err := os.Stat(f); err == nil {
+			t.Errorf("%s still exists after clearing", f)
+		}
+	}
+}
+
+func TestFileLabel(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if got := fileLabel(defaultModel); got != defaultModel {
+		t.Errorf("missing model labelled %q", got)
+	}
+	writeFile(t, legacyModel, strings.Repeat("x", 1500))
+	if got, want := fileLabel(defaultModel), "usergen.json (1.5 KB, old format; converted on next training)"; got != want {
+		t.Errorf("fileLabel = %q, want %q", got, want)
+	}
+	writeFile(t, defaultModel, strings.Repeat("x", 2_500_000))
+	if got, want := fileLabel(defaultModel), "usergen.model (2.5 MB)"; got != want {
+		t.Errorf("fileLabel = %q, want %q", got, want)
 	}
 }
