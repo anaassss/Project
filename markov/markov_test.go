@@ -2,8 +2,9 @@ package markov
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
-	"math"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -37,29 +38,62 @@ func rng() *rand.Rand { return rand.New(rand.NewPCG(1, 2)) }
 
 func TestLearnDeduplicatesCaseInsensitively(t *testing.T) {
 	m := trained(t, 2)
-	before := m.Contexts()
+	before := m.Patterns()
 	for _, name := range []string{"ShadowWolf", "shadowwolf", "SHADOWWOLF"} {
 		if added, err := m.Learn(name); err != nil || added {
 			t.Errorf("Learn(%q) = %v, %v; want false, nil", name, added, err)
 		}
 	}
-	if got := len(m.Names()); got != len(training) {
+	if got := m.Stats().Names; got != uint64(len(training)) {
 		t.Errorf("learned %d names, want %d", got, len(training))
 	}
-	if m.Contexts() != before {
+	if m.Patterns() != before {
 		t.Error("re-learning a known name changed the model")
 	}
 }
 
-func TestLearnRejectsInvalid(t *testing.T) {
+func TestLearnRejectsGarbage(t *testing.T) {
 	m, _ := New(3)
 	for _, name := range []string{"", "has space", "tab\there", "ctrl\x02", "bad\xff", "asdfghjkl", "user_123"} {
 		if _, err := m.Learn(name); !errors.Is(err, ErrGarbage) {
 			t.Errorf("Learn(%q) error = %v, want ErrGarbage", name, err)
 		}
 	}
-	if len(m.Names()) != 0 || m.Contexts() != 0 {
+	if m.Stats().Names != 0 || m.Patterns() != 0 {
 		t.Error("garbage was learned")
+	}
+}
+
+func TestLearnFromMatchesLearn(t *testing.T) {
+	// Enough names that every worker gets several batches.
+	var lines []string
+	for i := range 3 * batchSize * 4 {
+		if name := fmt.Sprintf("%s_%d", training[i%len(training)], i/len(training)); Check(name) == nil {
+			lines = append(lines, name)
+		}
+	}
+	input := "# comment\n\n" + strings.Join(lines, "\n") + "\n  ShadowWolf_0  \nshadowwolf_0\nasdfghjkl\nuser_5\n"
+
+	parallel, _ := New(3)
+	var rejected []string
+	res, err := parallel.LearnFrom(strings.NewReader(input), func(name, reason string) {
+		rejected = append(rejected, name+": "+reason)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Added != len(lines) || res.Known != 2 || res.RejectedTotal() != 2 {
+		t.Errorf("LearnFrom = %+v, want %d added, 2 known, 2 rejected", res, len(lines))
+	}
+	if want := []string{"asdfghjkl: keyboard or alphabet sequence", "user_5: placeholder or auto-generated"}; !slices.Equal(rejected, want) {
+		t.Errorf("rejected %v, want %v", rejected, want)
+	}
+
+	sequential, _ := New(3)
+	ScanNames(strings.NewReader(input), func(name string) { sequential.Learn(name) })
+	if !maps.Equal(parallel.grams, sequential.grams) || !maps.Equal(parallel.words, sequential.words) ||
+		!maps.Equal(parallel.numbers, sequential.numbers) || parallel.stats != sequential.stats {
+		t.Error("LearnFrom built a different model than Learn")
 	}
 }
 
@@ -117,10 +151,72 @@ func TestGenerateRejectsBadOptions(t *testing.T) {
 	}
 }
 
+func TestComplete(t *testing.T) {
+	m := trained(t, 3)
+	r := rng()
+	completed := 0
+	for range 50 {
+		got, ok := m.Complete(r, "Shadow", 12)
+		if !ok {
+			continue
+		}
+		completed++
+		if !strings.HasPrefix(got, "Shadow") || len(got) <= len("Shadow") || len(got) > 12 {
+			t.Errorf("Complete(Shadow, 12) = %q", got)
+		}
+	}
+	if completed == 0 {
+		t.Error("Complete never succeeded")
+	}
+	// Models too deep to pack contexts into integers complete the same way.
+	deep := trained(t, maxPackedOrder+1)
+	if deep.sampler().full != nil {
+		t.Fatal("deep model unexpectedly uses packed contexts")
+	}
+	ok := false
+	for range 50 {
+		if got, done := deep.Complete(r, "Shadow", 12); done {
+			ok = true
+			if !strings.HasPrefix(got, "Shadow") || len(got) <= len("Shadow") {
+				t.Errorf("deep Complete(Shadow) = %q", got)
+			}
+		}
+	}
+	if !ok {
+		t.Error("deep Complete never succeeded")
+	}
+	// It must not guess past a context it has never seen.
+	if got, ok := m.Complete(r, "Qzx", 20); ok {
+		t.Errorf("Complete(Qzx) = %q, want failure", got)
+	}
+	// A full learned name must be extended or fail, never returned as is.
+	for range 20 {
+		if got, ok := m.Complete(r, "ShadowWolf", 30); ok && got == "ShadowWolf" {
+			t.Fatal("Complete returned the prefix unchanged")
+		}
+	}
+}
+
+func TestFoldHash(t *testing.T) {
+	if FoldHash("ShadowWolf") != FoldHash("shadowWOLF") {
+		t.Error("ASCII hash is case-sensitive")
+	}
+	if FoldHash("ShadowWolf") != foldHashSlow("ShadowWolf") {
+		t.Error("fast and slow paths disagree on ASCII")
+	}
+	if FoldHash("Ünïcødé") != FoldHash("üNÏCØDÉ") {
+		t.Error("non-ASCII hash is case-sensitive")
+	}
+	if FoldHash("ShadowWolf") == FoldHash("ShadowWolf1") {
+		t.Error("different names hash alike")
+	}
+}
+
 func TestSaveLoadRoundTrip(t *testing.T) {
 	m := trained(t, 3)
 	m.Learn("Ünïcødé_Ωmega")
-	path := filepath.Join(t.TempDir(), "model.json")
+	m.Learn("Agent_007")
+	path := filepath.Join(t.TempDir(), "model")
 	if err := m.Save(path); err != nil {
 		t.Fatal(err)
 	}
@@ -128,11 +224,12 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Order() != m.Order() || loaded.Contexts() != m.Contexts() ||
-		!slices.Equal(loaded.Names(), m.Names()) {
+	if loaded.Order() != m.Order() || loaded.Stats() != m.Stats() ||
+		!maps.Equal(loaded.grams, m.grams) || !maps.Equal(loaded.words, m.words) ||
+		!maps.Equal(loaded.numbers, m.numbers) || loaded.seen.len() != m.seen.len() {
 		t.Fatal("loaded model differs from saved model")
 	}
-	if !loaded.Knows("ünïcødé_ωmega") {
+	if !loaded.Knows("ünïcødé_ωmega") || !loaded.Knows("SHADOWWOLF") {
 		t.Error("loaded model forgot a learned name")
 	}
 
@@ -152,74 +249,75 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLoadConvertsVersion1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.json")
+	body := `{"version":1,"order":2,"names":["ShadowWolf","asdfghjkl","NightHawk"],"counts":{}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Order() != 2 || m.Stats().Names != 2 || !m.Knows("nighthawk") || m.Knows("asdfghjkl") {
+		t.Errorf("converted model: order %d, %d names, knows garbage %v",
+			m.Order(), m.Stats().Names, m.Knows("asdfghjkl"))
+	}
+}
+
 func TestLoadRejectsBadFiles(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := Load(filepath.Join(dir, "missing.json")); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := Load(filepath.Join(dir, "missing")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("loading a missing file: %v, want fs.ErrNotExist", err)
 	}
-	for name, body := range map[string]string{
-		"garbage":     `not json`,
-		"version":     `{"version":99,"order":3}`,
-		"order":       `{"version":1,"order":0}`,
-		"long ctx":    `{"version":1,"order":1,"counts":{"ab":{"c":1}}}`,
-		"bad count":   `{"version":1,"order":2,"counts":{"a":{"b":0}}}`,
-		"multi-char":  `{"version":1,"order":2,"counts":{"a":{"bc":1}}}`,
-		"empty rune":  `{"version":1,"order":2,"counts":{"a":{"":1}}}`,
-		"trailing ok": `{"version":1,"order":2,"counts":{"a":{"b":1}}} `,
+
+	good := filepath.Join(dir, "good")
+	if err := trained(t, 3).Save(good); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(good)
+	for name, body := range map[string][]byte{
+		"empty":      nil,
+		"garbage":    []byte("not a model"),
+		"truncated":  data[:len(data)/2],
+		"bad json":   []byte(`{"version":1,`),
+		"json v9":    []byte(`{"version":9,"order":3}`),
+		"json order": []byte(`{"version":1,"order":0}`),
+		"version":    append([]byte(magic), 9),
 	} {
-		path := filepath.Join(dir, "model.json")
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		path := filepath.Join(dir, "bad")
+		if err := os.WriteFile(path, body, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		_, err := Load(path)
-		if wantOK := name == "trailing ok"; (err == nil) != wantOK {
-			t.Errorf("%s: Load error = %v, want ok=%v", name, err, wantOK)
+		if _, err := Load(path); err == nil {
+			t.Errorf("%s: Load succeeded, want error", name)
 		}
 	}
 }
 
-func TestScoreRanksPlausibleAboveGarbage(t *testing.T) {
-	m := trained(t, 3)
-	if good, bad := m.Score("ShadowHawk"), m.Score("Qzxwvk"); good <= bad {
-		t.Errorf("Score(ShadowHawk) = %.2f, not above Score(Qzxwvk) = %.2f", good, bad)
-	}
-}
-
-func TestHeldOutScores(t *testing.T) {
-	m := trained(t, 3)
-	held := m.HeldOutScores()
-	if len(held) != len(training) {
-		t.Fatalf("got %d held-out scores, want %d", len(held), len(training))
-	}
-	for i, name := range m.Names() {
-		if in := m.Score(name); held[i] >= in {
-			t.Errorf("%s: held-out score %.2f not below in-sample %.2f", name, held[i], in)
-		}
-	}
-
-	// Holding out a lone name leaves nothing learned: every character backs off
-	// through all 3 context lengths (order 2, 1, 0) and is then unseen.
-	one, _ := New(2)
-	one.Learn("Solo")
-	if got, want := one.HeldOutScores()[0], 3*backoffPenalty+unseenPenalty; math.Abs(got-want) > 1e-9 {
-		t.Errorf("lone held-out score = %v, want %v", got, want)
-	}
-}
-
-func TestComplete(t *testing.T) {
-	m := trained(t, 3)
+func TestHashSetFilterIsExact(t *testing.T) {
+	s := newHashSet()
 	r := rng()
-	for range 50 {
-		got, ok := m.Complete(r, "Shadow", 12)
-		if !ok {
-			continue
-		}
-		if !strings.HasPrefix(got, "Shadow") || len([]rune(got)) <= len("Shadow") || len([]rune(got)) > 12 {
-			t.Errorf("Complete(Shadow, 12) = %q", got)
+	in := map[uint64]bool{}
+	for range 50000 {
+		h := r.Uint64()
+		s.add(h)
+		in[h] = true
+	}
+	for h := range in {
+		if !s.has(h) {
+			t.Fatalf("has(%x) = false for an added element", h)
 		}
 	}
-	// A full learned name must still be extended, not ended immediately.
-	if got, ok := m.Complete(r, "ShadowWolf", 30); ok && got == "ShadowWolf" {
-		t.Error("Complete returned the prefix unchanged")
+	for range 50000 {
+		if h := r.Uint64(); s.has(h) != in[h] {
+			t.Fatalf("has(%x) disagrees with membership", h)
+		}
+	}
+	// Adding invalidates the filter.
+	h := r.Uint64()
+	s.add(h)
+	if !s.has(h) {
+		t.Error("element added after the filter was built is missing")
 	}
 }

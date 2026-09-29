@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,8 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
-	"unicode/utf8"
+	"time"
 
 	"github.com/anaassss/Project/edit"
 	"github.com/anaassss/Project/markov"
@@ -18,7 +16,15 @@ import (
 
 // Edit module: rewrite the usernames in a file using what the model learned.
 
-const defaultMaxEdits = 10
+const (
+	defaultMaxEdits = 10
+
+	// Editing reads its input twice: once to note every input username, then
+	// to edit them. The second pass takes about 20 times as long per byte,
+	// so the progress bar weights its bytes to match.
+	readWeight = 1
+	editWeight = 20
+)
 
 func editCommand(args []string) error {
 	flags := flag.NewFlagSet("edit", flag.ExitOnError)
@@ -28,7 +34,7 @@ func editCommand(args []string) error {
 	allowKnown := flags.Bool("allow-known", false, "allow edits that are usernames the model learned from")
 	flags.Parse(args)
 	if flags.NArg() != 1 {
-		return errors.New("edit needs exactly one file of usernames (or - for stdin)")
+		return errors.New("edit needs exactly one file of usernames")
 	}
 
 	m, err := loadModel(*modelPath)
@@ -36,96 +42,98 @@ func editCommand(args []string) error {
 		return err
 	}
 	opts := edit.Options{Max: *maxEdits, AllowKnown: *allowKnown}
-	_, err = editFile(os.Stdout, m, flags.Arg(0), opts, *seed, ".")
-	return err
+	summary, err := editFile(m, flags.Arg(0), opts, *seed, ".", terminalOrNil(os.Stderr))
+	if err != nil {
+		return err
+	}
+	fmt.Println(summary)
+	return nil
 }
 
-// editFile edits every username in path, printing each one's edits to w, and
-// saves all edits, one per line, to edited_<count>.txt in dir. It returns the
-// file written, or "" if the model found no edits.
-func editFile(w io.Writer, m *markov.Model, path string, opts edit.Options, seed uint64, dir string) (string, error) {
-	var inputs []string
-	isInput := map[string]bool{}
-	err := eachName(path, func(name string) {
-		if key := strings.ToLower(name); !isInput[key] {
-			isInput[key] = true
-			inputs = append(inputs, name)
-		}
-	})
+// editFile edits every username in path and saves the edits, one per line,
+// to edited_<count>.txt in dir, drawing a progress bar on bar (nil for none).
+// It returns a one-line summary.
+func editFile(m *markov.Model, path string, opts edit.Options, seed uint64, dir string, bar io.Writer) (string, error) {
+	e, err := edit.New(m, opts)
 	if err != nil {
 		return "", err
 	}
-	if len(inputs) == 0 {
-		return "", fmt.Errorf("%s has no usernames", path)
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
 	}
-
-	e, err := edit.New(m, newRand(seed), opts)
+	defer f.Close()
+	info, err := f.Stat()
 	if err != nil {
 		return "", err
 	}
 
-	width := 0
-	for _, name := range inputs {
-		width = max(width, utf8.RuneCountInString(name))
-	}
-	width = min(width, markov.MaxNameLen)
-
-	var all []string
-	written := map[string]bool{}
-	for _, name := range inputs {
-		var edits []string
-		for _, ed := range e.Edit(name) {
-			// Skip edits another input already produced, or that are inputs.
-			if key := strings.ToLower(ed); !written[key] && !isInput[key] {
-				written[key] = true
-				edits = append(edits, ed)
-			}
+	p := startProgress(bar, "Editing", info.Size()*(readWeight+editWeight))
+	var out string
+	var count int
+	err = func() error {
+		// Note every input so that no edit repeats one.
+		seen := map[uint64]struct{}{}
+		err := markov.ScanNames(p.reader(f, readWeight), func(name string) {
+			seen[markov.FoldHash(name)] = struct{}{}
+		})
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", path, err)
 		}
-		all = append(all, edits...)
-
-		summary := strings.Join(edits, ", ")
-		if len(edits) == 0 {
-			summary = "(nothing the model learned fits this name)"
+		if len(seen) == 0 {
+			return fmt.Errorf("%s has no usernames", path)
 		}
-		fmt.Fprintf(w, "  %-*s %3d  %s\n", width, name, len(edits), summary)
-	}
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
 
-	if len(all) == 0 {
-		fmt.Fprintln(w, "No edits found; train on more usernames like these first.")
-		return "", nil
-	}
-	out, err := writeEdited(dir, all)
+		tmp, err := os.CreateTemp(dir, ".edited-*.tmp")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(tmp.Name()) // no-op once renamed
+		count, err = e.Run(p.reader(f, editWeight), tmp, seen, orRandom(seed))
+		if closeErr := tmp.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil || count == 0 {
+			return err
+		}
+		if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+			return err
+		}
+		out, err = placeEdited(tmp.Name(), dir, count)
+		return err
+	}()
+	elapsed := p.end(err == nil)
 	if err != nil {
 		return "", err
 	}
-	fmt.Fprintf(w, "Saved %d edited usernames to %s\n", len(all), out)
-	return out, nil
+	return editSummary(out, count, elapsed), nil
 }
 
-// writeEdited saves names to edited_<count>.txt in dir. It never overwrites:
+func editSummary(path string, count int, elapsed time.Duration) string {
+	if count == 0 {
+		return "No edits found; train on more usernames like these first."
+	}
+	return fmt.Sprintf("Saved %s edited usernames to %s in %s", formatCount(count), path, formatDuration(elapsed))
+}
+
+// placeEdited moves tmp to edited_<count>.txt in dir. It never overwrites:
 // if that file exists it uses edited_<count>_2.txt, edited_<count>_3.txt, ...
-func writeEdited(dir string, names []string) (string, error) {
+func placeEdited(tmp, dir string, count int) (string, error) {
 	for i := 1; ; i++ {
-		base := fmt.Sprintf("edited_%d.txt", len(names))
+		name := fmt.Sprintf("edited_%d.txt", count)
 		if i > 1 {
-			base = fmt.Sprintf("edited_%d_%d.txt", len(names), i)
+			name = fmt.Sprintf("edited_%d_%d.txt", count, i)
 		}
-		path := filepath.Join(dir, base)
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if errors.Is(err, fs.ErrExist) {
-			continue
+		path := filepath.Join(dir, name)
+		_, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return path, os.Rename(tmp, path)
 		}
 		if err != nil {
 			return "", err
 		}
-		bw := bufio.NewWriter(f)
-		for _, name := range names {
-			bw.WriteString(name + "\n")
-		}
-		if err := bw.Flush(); err != nil {
-			f.Close()
-			return "", err
-		}
-		return path, f.Close()
 	}
 }

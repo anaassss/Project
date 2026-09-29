@@ -1,26 +1,26 @@
 // Package markov implements a character-level Markov model that learns the
-// shape of usernames (which characters tend to follow which) and generates
-// new usernames from what it has learned. Models can be saved to and loaded
-// from disk so learning accumulates across runs.
+// shape of usernames (which characters tend to follow which, and which words
+// and numbers they are made of) and generates new usernames from it. Models
+// are saved to and loaded from disk so learning accumulates across runs, and
+// training scales to millions of usernames by using every CPU core.
 package markov
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
-	"os"
-	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 )
 
 const (
-	formatVersion = 1
-
 	// MaxOrder bounds how many previous characters a model can condition on.
 	MaxOrder = 8
 
@@ -30,22 +30,39 @@ const (
 	startRune = '\x02'
 	endRune   = '\x03'
 
-	// backoffPenalty is the log-weight Score applies each time it falls back
-	// to a shorter context ("stupid backoff", weight 0.4).
-	backoffPenalty = -0.916290731874155
-	// unseenPenalty is the log-weight Score gives a character the model has
-	// never seen at all.
-	unseenPenalty = -13.815510557964274 // log(1e-6)
+	batchSize = 4096 // usernames handed to a worker at a time
 )
 
-// Model counts, for every context of 0..order preceding characters, how often
-// each next character follows it.
+// Model is a trained username model. Its methods may be called from many
+// goroutines at once, except Learn and LearnFrom, which must not overlap
+// with other calls.
 type Model struct {
-	order  int
-	counts map[string]map[rune]int
-	totals map[string]int      // sum of each counts row, for Score
-	names  []string            // every learned name, in learning order
-	seen   map[string]struct{} // lowercased names, for dedupe and novelty
+	order int
+	tally
+	seen *hashSet // FoldHash of every learned name
+
+	tableMu sync.Mutex
+	table   atomic.Pointer[tables] // sampling tables built from grams; nil when stale
+}
+
+// tally holds everything counted from learned names. Workers fill their own
+// tallies in parallel, which are then merged.
+type tally struct {
+	// grams counts every context of 0..order characters together with the
+	// character that followed it, keyed by the context's UTF-8 bytes then
+	// the next character's.
+	grams   map[string]uint32
+	words   map[string]uint32 // lowercased words of 2+ letters
+	numbers map[string]uint32 // digit runs
+	stats   Stats
+}
+
+// Stats summarises the usernames a model has learned.
+type Stats struct {
+	Names    uint64 // usernames learned
+	TotalLen uint64 // their combined length in characters
+	MinLen   int
+	MaxLen   int
 }
 
 // New returns an empty model that conditions on up to order characters.
@@ -57,28 +74,31 @@ func New(order int) (*Model, error) {
 }
 
 func newModel(order int) *Model {
-	return &Model{
-		order:  order,
-		counts: make(map[string]map[rune]int),
-		totals: make(map[string]int),
-		seen:   make(map[string]struct{}),
+	return &Model{order: order, tally: newTally(), seen: newHashSet()}
+}
+
+func newTally() tally {
+	return tally{
+		grams:   make(map[string]uint32),
+		words:   make(map[string]uint32),
+		numbers: make(map[string]uint32),
 	}
 }
 
 // Order reports the longest context the model was trained with.
 func (m *Model) Order() int { return m.order }
 
-// Names returns the usernames the model has learned from.
-func (m *Model) Names() []string { return m.names }
+// Stats summarises what the model has learned.
+func (m *Model) Stats() Stats { return m.stats }
 
-// Contexts reports how many distinct contexts the model has observed.
-func (m *Model) Contexts() int { return len(m.counts) }
+// Patterns reports how many distinct character patterns the model has seen.
+func (m *Model) Patterns() int { return len(m.grams) }
 
 // Knows reports whether name (case-insensitively) was learned from.
-func (m *Model) Knows(name string) bool {
-	_, ok := m.seen[strings.ToLower(name)]
-	return ok
-}
+func (m *Model) Knows(name string) bool { return m.seen.has(FoldHash(name)) }
+
+// KnowsHash is Knows for a name whose FoldHash is h.
+func (m *Model) KnowsHash(h uint64) bool { return m.seen.has(h) }
 
 // Learn adds name to the model. It returns a *GarbageError without changing
 // the model if name fails Check, and false if the name (case-insensitively)
@@ -87,110 +107,367 @@ func (m *Model) Learn(name string) (bool, error) {
 	if err := Check(name); err != nil {
 		return false, err
 	}
-	if m.Knows(name) {
+	if !m.seen.add(FoldHash(name)) {
 		return false, nil
 	}
-	m.learn(name)
+	m.tally.add(m.order, name, nil)
+	m.table.Store(nil)
 	return true, nil
 }
 
-// learn counts name's transitions without checking it.
-func (m *Model) learn(name string) {
-	padded := m.pad(name)
-	for i := m.order; i < len(padded); i++ {
-		next := padded[i]
-		for k := 0; k <= m.order; k++ {
-			ctx := string(padded[i-k : i])
-			row := m.counts[ctx]
-			if row == nil {
-				row = make(map[rune]int)
-				m.counts[ctx] = row
+// LearnResult tallies a LearnFrom run.
+type LearnResult struct {
+	Added    int            // new usernames learned
+	Known    int            // usernames already learned, skipped
+	Rejected map[string]int // garbage usernames skipped, by reason
+}
+
+// RejectedTotal is the number of garbage usernames skipped.
+func (r LearnResult) RejectedTotal() int {
+	n := 0
+	for _, c := range r.Rejected {
+		n += c
+	}
+	return n
+}
+
+// LearnFrom learns every username in r (see ScanNames). It checks and
+// deduplicates names in input order, so the result is the same as calling
+// Learn on each, and counts their patterns on all CPU cores. If onRejected is
+// non-nil it is called with every garbage username and the reason.
+func (m *Model) LearnFrom(r io.Reader, onRejected func(name, reason string)) (LearnResult, error) {
+	workers := runtime.GOMAXPROCS(0)
+	batches := make(chan []string, workers)
+	tallies := make(chan tally, workers)
+	for range workers {
+		go func() {
+			t := newTally()
+			var offs []int
+			for batch := range batches {
+				for _, name := range batch {
+					offs = t.add(m.order, name, offs)
+				}
 			}
-			row[next]++
-			m.totals[ctx]++
+			tallies <- t
+		}()
+	}
+
+	res := LearnResult{Rejected: map[string]int{}}
+	batch := make([]string, 0, batchSize)
+	err := ScanNames(r, func(name string) {
+		if err := Check(name); err != nil {
+			reason := err.(*GarbageError).Reason
+			res.Rejected[reason]++
+			if onRejected != nil {
+				onRejected(name, reason)
+			}
+			return
+		}
+		if !m.seen.add(FoldHash(name)) {
+			res.Known++
+			return
+		}
+		res.Added++
+		if batch = append(batch, name); len(batch) == batchSize {
+			batches <- batch
+			batch = make([]string, 0, batchSize)
+		}
+	})
+	if len(batch) > 0 {
+		batches <- batch
+	}
+	close(batches)
+
+	for range workers {
+		t := <-tallies
+		m.tally.merge(&t)
+	}
+	m.table.Store(nil)
+	return res, err
+}
+
+// ScanNames calls fn with every username in r: one per line, trimmed, with
+// blank lines and lines starting with # skipped.
+func ScanNames(r io.Reader, fn func(string)) error {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line != "" && line[0] != '#' {
+			fn(line)
+		}
+	}
+	return sc.Err()
+}
+
+// add counts name's patterns, words and numbers. offs is scratch space that
+// add returns for reuse. Map keys are substrings of one padded string, so
+// counting a pattern the tally has already seen allocates nothing.
+func (t *tally) add(order int, name string, offs []int) []int {
+	padded := strings.Repeat(string(rune(startRune)), order) + name + string(rune(endRune))
+	offs = offs[:0]
+	for i := range padded {
+		offs = append(offs, i)
+	}
+	offs = append(offs, len(padded))
+	for i := order; i < len(offs)-1; i++ {
+		end := offs[i+1]
+		for k := 0; k <= order; k++ {
+			t.grams[padded[offs[i-k]:end]]++
 		}
 	}
 
-	m.seen[strings.ToLower(name)] = struct{}{}
-	m.names = append(m.names, name)
-}
-
-// pad surrounds name with start and end markers so the first and last
-// characters have contexts too.
-func (m *Model) pad(name string) []rune {
-	runes := []rune(name)
-	padded := make([]rune, 0, m.order+len(runes)+1)
-	for range m.order {
-		padded = append(padded, startRune)
+	// Only names that mark where words start and end ("ShadowWolf",
+	// "shadow_wolf") teach words; "shadowwolf" would teach the compound.
+	segs := Split(name)
+	wordCount := 0
+	for _, seg := range segs {
+		if seg.Kind == Word {
+			wordCount++
+		}
 	}
-	padded = append(padded, runes...)
-	return append(padded, endRune)
-}
-
-// Score rates how well name fits what the model has learned: the average log
-// probability of each character (and of the name ending there) given the
-// characters before it. When the full context never preceded a character it
-// backs off to shorter contexts with a penalty. Higher is more typical.
-func (m *Model) Score(name string) float64 {
-	return m.score(name, nil)
-}
-
-// HeldOutScores returns, for each learned name, the Score it would get had
-// the model never learned it. Learned names score unrealistically well on
-// their own patterns; these scores show what a genuinely new but typical
-// username scores.
-func (m *Model) HeldOutScores() []float64 {
-	scores := make([]float64, len(m.names))
-	for i, name := range m.names {
-		own := newModel(m.order)
-		own.learn(name)
-		scores[i] = m.score(name, own)
+	for _, seg := range segs {
+		switch {
+		case seg.Kind == Word && wordCount >= 2 && utf8.RuneCountInString(seg.Text) >= 2:
+			t.words[strings.ToLower(seg.Text)]++
+		case seg.Kind == Number:
+			t.numbers[seg.Text]++
+		}
 	}
-	return scores
+
+	n := utf8.RuneCountInString(name)
+	if t.stats.Names == 0 || n < t.stats.MinLen {
+		t.stats.MinLen = n
+	}
+	t.stats.MaxLen = max(t.stats.MaxLen, n)
+	t.stats.Names++
+	t.stats.TotalLen += uint64(n)
+	return offs
 }
 
-// score implements Score, ignoring the counts in exclude if it is non-nil.
-func (m *Model) score(name string, exclude *Model) float64 {
-	padded := m.pad(name)
+// merge adds o's counts to t, reusing whichever maps are larger.
+func (t *tally) merge(o *tally) {
+	mergeCounts(&t.grams, o.grams)
+	mergeCounts(&t.words, o.words)
+	mergeCounts(&t.numbers, o.numbers)
+	if o.stats.Names == 0 {
+		return
+	}
+	if t.stats.Names == 0 || o.stats.MinLen < t.stats.MinLen {
+		t.stats.MinLen = o.stats.MinLen
+	}
+	t.stats.MaxLen = max(t.stats.MaxLen, o.stats.MaxLen)
+	t.stats.Names += o.stats.Names
+	t.stats.TotalLen += o.stats.TotalLen
+}
+
+func mergeCounts(dst *map[string]uint32, src map[string]uint32) {
+	if len(src) > len(*dst) {
+		src, *dst = *dst, src
+	}
+	for k, v := range src {
+		(*dst)[k] += v
+	}
+}
+
+// TopWords returns up to n learned words, lowercased, most common first.
+func (m *Model) TopWords(n int) []string { return mostCommon(m.words, n) }
+
+// TopNumbers returns up to n learned numbers, most common first.
+func (m *Model) TopNumbers(n int) []string { return mostCommon(m.numbers, n) }
+
+func mostCommon(counts map[string]uint32, n int) []string {
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if counts[keys[i]] != counts[keys[j]] {
+			return counts[keys[i]] > counts[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	return keys[:min(n, len(keys))]
+}
+
+// tables index what followed each context, for sampling.
+type tables struct {
+	// byText is keyed by a context's UTF-8 bytes, for contexts of any length.
+	byText map[string]dist
+	// full holds just the order-length contexts keyed by packContext, for
+	// models of order up to maxPackedOrder: the lookup Complete makes for
+	// every character it writes, done without hashing strings.
+	full map[uint64]dist
+}
+
+// Packing 21-bit runes into a uint64 fits three of them.
+const (
+	runeBits       = 21
+	maxPackedOrder = 3
+)
+
+// pushRune shifts r into a packed context of order runes.
+func pushRune(ctx uint64, r rune, order int) uint64 {
+	return (ctx<<runeBits | uint64(r)) & (1<<(runeBits*order) - 1)
+}
+
+// dist lists the characters that followed a context, sorted so endRune (the
+// smallest) is first if present, each with the cumulative count up to and
+// including it. It is one flat array so sampling touches little memory.
+type dist []successor
+
+type successor struct {
+	r   rune
+	cum uint32
+}
+
+// sampler returns the sampling tables, building them on first use after
+// learning.
+func (m *Model) sampler() *tables {
+	if t := m.table.Load(); t != nil {
+		return t
+	}
+	m.tableMu.Lock()
+	defer m.tableMu.Unlock()
+	if t := m.table.Load(); t != nil {
+		return t
+	}
+
+	type entry struct {
+		r rune
+		c uint32
+	}
+	rows := make(map[string][]entry)
+	for key, c := range m.grams {
+		r, size := utf8.DecodeLastRuneInString(key)
+		ctx := key[:len(key)-size]
+		rows[ctx] = append(rows[ctx], entry{r, c})
+	}
+	t := &tables{byText: make(map[string]dist, len(rows))}
+	if m.order <= maxPackedOrder {
+		t.full = make(map[uint64]dist)
+	}
+	for ctx, entries := range rows {
+		sort.Slice(entries, func(i, j int) bool { return entries[i].r < entries[j].r })
+		d := make(dist, len(entries))
+		var sum uint32
+		for i, e := range entries {
+			sum += e.c
+			d[i] = successor{e.r, sum}
+		}
+		t.byText[ctx] = d
+		if t.full != nil && utf8.RuneCountInString(ctx) == m.order {
+			var key uint64
+			for _, r := range ctx {
+				key = pushRune(key, r, m.order)
+			}
+			t.full[key] = d
+		}
+	}
+	m.table.Store(t)
+	return t
+}
+
+// pick samples a character in proportion to its count, or returns -1 if
+// allowEnd is false and ending the name is the only option.
+func (d dist) pick(rng *rand.Rand, allowEnd bool) rune {
+	total := d[len(d)-1].cum
+	var lo uint32
+	if !allowEnd && d[0].r == endRune {
+		if lo = d[0].cum; lo == total {
+			return -1
+		}
+	}
+	x := lo + rng.Uint32N(total-lo)
+	// Find the first cumulative count above x.
+	i, j := 0, len(d)-1
+	for i < j {
+		if h := int(uint(i+j) >> 1); d[h].cum > x {
+			j = h
+		} else {
+			i = h + 1
+		}
+	}
+	return d[i].r
+}
+
+// pickTemp samples with counts raised to the power 1/temperature.
+func (d dist) pickTemp(rng *rand.Rand, temperature float64) rune {
+	if temperature == 1 {
+		return d.pick(rng, true)
+	}
+	weights := make([]float64, len(d))
 	var total float64
-	for i := m.order; i < len(padded); i++ {
-		total += m.logProb(padded[i-m.order:i], padded[i], exclude)
+	var prev uint32
+	for i, s := range d {
+		weights[i] = math.Pow(float64(s.cum-prev), 1/temperature)
+		total += weights[i]
+		prev = s.cum
 	}
-	return total / float64(len(padded)-m.order)
+	x := rng.Float64() * total
+	for i, w := range weights {
+		if x -= w; x < 0 {
+			return d[i].r
+		}
+	}
+	return d[len(d)-1].r
 }
 
-func (m *Model) logProb(ctx []rune, next rune, exclude *Model) float64 {
-	var penalty float64
-	for k := len(ctx); k >= 0; k-- {
-		key := string(ctx[len(ctx)-k:])
-		c, total := m.counts[key][next], m.totals[key]
-		if exclude != nil {
-			c -= exclude.counts[key][next]
-			total -= exclude.totals[key]
-		}
-		if c > 0 {
-			return penalty + math.Log(float64(c)/float64(total))
-		}
-		penalty += backoffPenalty
+// ctxStart returns where the last k characters of buf begin.
+func ctxStart(buf []byte, k int) int {
+	i := len(buf)
+	for ; k > 0 && i > 0; k-- {
+		_, size := utf8.DecodeLastRune(buf[:i])
+		i -= size
 	}
-	return penalty + unseenPenalty
+	return i
 }
 
-// Clean rebuilds the model from only the learned names that pass Check,
-// removing anything learned before the current garbage rules, and returns
-// the names it dropped.
-func (m *Model) Clean() []string {
-	clean := newModel(m.order)
-	var dropped []string
-	for _, name := range m.names {
-		if Check(name) != nil {
-			dropped = append(dropped, name)
-			continue
-		}
-		clean.learn(name)
+// Complete keeps prefix and lets the model write the rest of the name, adding
+// at least one character. It only continues from patterns the model has
+// actually seen with its full context, never guessing from shorter ones, and
+// returns false if it would have to, or if the result would be longer than
+// maxLen characters.
+func (m *Model) Complete(rng *rand.Rand, prefix string, maxLen int) (string, bool) {
+	t := m.sampler()
+	buf := make([]byte, 0, m.order+len(prefix)+4*8)
+	for range m.order {
+		buf = append(buf, startRune)
 	}
-	*m = *clean
-	return dropped
+	buf = append(buf, prefix...)
+	var packed uint64
+	if t.full != nil {
+		for i := 0; i < m.order; i++ {
+			packed = pushRune(packed, startRune, m.order)
+		}
+		for _, r := range prefix {
+			packed = pushRune(packed, r, m.order)
+		}
+	}
+	n := utf8.RuneCountInString(prefix)
+	for added := 0; ; added++ {
+		var d dist
+		if t.full != nil {
+			d = t.full[packed]
+		} else {
+			d = t.byText[string(buf[ctxStart(buf, m.order):])]
+		}
+		if d == nil {
+			return "", false
+		}
+		r := d.pick(rng, added > 0)
+		if r < 0 {
+			return "", false
+		}
+		if r == endRune {
+			return string(buf[m.order:]), true
+		}
+		if n++; n > maxLen {
+			return "", false
+		}
+		buf = utf8.AppendRune(buf, r)
+		packed = pushRune(packed, r, m.order)
+	}
 }
 
 // GenerateOptions controls username generation.
@@ -215,7 +492,7 @@ type GenerateOptions struct {
 // fewer than n when the model cannot produce enough distinct names satisfying
 // opts, which typically means it was trained on too few names for its order.
 func (m *Model) Generate(rng *rand.Rand, n int, opts GenerateOptions) ([]string, error) {
-	if len(m.names) == 0 {
+	if m.stats.Names == 0 {
 		return nil, errors.New("model has not learned any usernames yet")
 	}
 	if opts.Order == 0 {
@@ -237,200 +514,51 @@ func (m *Model) Generate(rng *rand.Rand, n int, opts GenerateOptions) ([]string,
 	}
 
 	out := make([]string, 0, n)
-	produced := make(map[string]struct{}, n)
+	produced := make(map[uint64]struct{}, n)
 	for attempts := 0; len(out) < n && attempts < n*500; attempts++ {
 		name, ok := m.sample(rng, opts)
 		if !ok {
 			continue
 		}
-		key := strings.ToLower(name)
-		if _, dup := produced[key]; dup {
+		h := FoldHash(name)
+		if _, dup := produced[h]; dup {
 			continue
 		}
-		if !opts.AllowKnown && m.Knows(name) {
+		if (!opts.AllowKnown && m.seen.has(h)) || Check(name) != nil {
 			continue
 		}
-		if Check(name) != nil {
-			continue
-		}
-		produced[key] = struct{}{}
+		produced[h] = struct{}{}
 		out = append(out, name)
 	}
 	return out, nil
 }
 
-// sample walks the chain once, returning false if the result is out of bounds.
+// sample walks the chain once from the start, backing off to shorter
+// contexts when needed, and returns false if the result is out of bounds.
 func (m *Model) sample(rng *rand.Rand, opts GenerateOptions) (string, bool) {
-	out, ok := m.walk(rng, nil, 0, opts.Order, opts.Temperature, opts.MaxLen)
-	if !ok || len(out) < opts.MinLen {
-		return "", false
+	t := m.sampler()
+	buf := make([]byte, 0, m.order+opts.MaxLen+4)
+	for range m.order {
+		buf = append(buf, startRune)
 	}
-	return string(out), true
-}
-
-// Complete keeps prefix and lets the model write the rest of the name, adding
-// at least one character. It returns false if the result would be longer than
-// maxLen characters.
-func (m *Model) Complete(rng *rand.Rand, prefix string, maxLen int) (string, bool) {
-	out, ok := m.walk(rng, []rune(prefix), 1, m.order, 1, maxLen)
-	return string(out), ok
-}
-
-// walk extends prefix one sampled character at a time until the model ends
-// the name, not allowing an end before minNew characters have been added.
-func (m *Model) walk(rng *rand.Rand, prefix []rune, minNew, order int, temperature float64, maxLen int) ([]rune, bool) {
-	ctx := make([]rune, order)
-	for i := range ctx {
-		ctx[i] = startRune
-	}
-	push := func(r rune) {
-		copy(ctx, ctx[1:])
-		ctx[len(ctx)-1] = r
-	}
-	for _, r := range prefix {
-		push(r)
-	}
-	out := append([]rune(nil), prefix...)
+	n := 0
 	for {
-		next, ok := m.next(rng, ctx, temperature, len(out)-len(prefix) >= minNew)
-		if !ok || next == endRune {
+		r := rune(-1)
+		for k := opts.Order; k >= 0 && r < 0; k-- {
+			if d := t.byText[string(buf[ctxStart(buf, k):])]; d != nil {
+				r = d.pickTemp(rng, opts.Temperature)
+			}
+		}
+		if r < 0 || r == endRune {
 			break
 		}
-		out = append(out, next)
-		if len(out) > maxLen {
-			return nil, false
+		if n++; n > opts.MaxLen {
+			return "", false
 		}
-		push(next)
+		buf = utf8.AppendRune(buf, r)
 	}
-	return out, true
-}
-
-// next samples the character following ctx, backing off to shorter contexts
-// when the full one was never observed (or, if !allowEnd, was only ever
-// followed by the end of a name).
-func (m *Model) next(rng *rand.Rand, ctx []rune, temperature float64, allowEnd bool) (rune, bool) {
-	for k := len(ctx); k >= 0; k-- {
-		row := m.counts[string(ctx[len(ctx)-k:])]
-		// Sort so a fixed seed always yields the same names.
-		candidates := make([]rune, 0, len(row))
-		for r := range row {
-			if allowEnd || r != endRune {
-				candidates = append(candidates, r)
-			}
-		}
-		if len(candidates) == 0 {
-			continue
-		}
-		sort.Slice(candidates, func(i, j int) bool { return candidates[i] < candidates[j] })
-
-		weights := make([]float64, len(candidates))
-		var total float64
-		for i, r := range candidates {
-			weights[i] = math.Pow(float64(row[r]), 1/temperature)
-			total += weights[i]
-		}
-		pick := rng.Float64() * total
-		for i, w := range weights {
-			pick -= w
-			if pick < 0 {
-				return candidates[i], true
-			}
-		}
-		return candidates[len(candidates)-1], true
+	if n < opts.MinLen {
+		return "", false
 	}
-	return 0, false
-}
-
-// file is the on-disk representation of a Model.
-type file struct {
-	Version int                       `json:"version"`
-	Order   int                       `json:"order"`
-	Names   []string                  `json:"names"`
-	Counts  map[string]map[string]int `json:"counts"`
-}
-
-// Save writes the model to path atomically, so an interrupted save never
-// leaves a corrupt model behind.
-func (m *Model) Save(path string) (err error) {
-	f := file{
-		Version: formatVersion,
-		Order:   m.order,
-		Names:   m.names,
-		Counts:  make(map[string]map[string]int, len(m.counts)),
-	}
-	for ctx, row := range m.counts {
-		out := make(map[string]int, len(row))
-		for r, c := range row {
-			out[string(r)] = c
-		}
-		f.Counts[ctx] = out
-	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			tmp.Close()
-			os.Remove(tmp.Name())
-		}
-	}()
-
-	w := bufio.NewWriter(tmp)
-	if err = json.NewEncoder(w).Encode(f); err != nil {
-		return err
-	}
-	if err = w.Flush(); err != nil {
-		return err
-	}
-	if err = tmp.Chmod(0o644); err != nil {
-		return err
-	}
-	if err = tmp.Sync(); err != nil {
-		return err
-	}
-	if err = tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
-}
-
-// Load reads a model previously written by Save.
-func Load(path string) (*Model, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var f file
-	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("%s: not a valid model file: %w", path, err)
-	}
-	if f.Version != formatVersion {
-		return nil, fmt.Errorf("%s: unsupported model version %d (want %d)", path, f.Version, formatVersion)
-	}
-	m, err := New(f.Order)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	for ctx, row := range f.Counts {
-		if utf8.RuneCountInString(ctx) > m.order {
-			return nil, fmt.Errorf("%s: context %q is longer than order %d", path, ctx, m.order)
-		}
-		counts := make(map[rune]int, len(row))
-		for s, c := range row {
-			r, size := utf8.DecodeRuneInString(s)
-			if size == 0 || size != len(s) || c < 1 {
-				return nil, fmt.Errorf("%s: corrupt count %q=%d in context %q", path, s, c, ctx)
-			}
-			counts[r] = c
-			m.totals[ctx] += c
-		}
-		m.counts[ctx] = counts
-	}
-	for _, name := range f.Names {
-		m.seen[strings.ToLower(name)] = struct{}{}
-	}
-	m.names = f.Names
-	return m, nil
+	return string(buf[m.order:]), true
 }

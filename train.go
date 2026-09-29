@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"time"
 
 	"github.com/anaassss/Project/markov"
 )
@@ -35,80 +35,83 @@ func train(args []string) error {
 			*modelPath, m.Order(), *order)
 	}
 
-	var rejectedOut io.Writer
+	var onRejected func(name, reason string)
 	if *showRejected {
-		rejectedOut = os.Stderr
+		onRejected = func(name, reason string) { fmt.Fprintf(os.Stderr, "rejected %q: %s\n", name, reason) }
 	}
-	res, err := learnFiles(m, flags.Args(), rejectedOut)
+	save := *modelPath
+	if *dryRun {
+		save = ""
+	}
+	summary, err := trainFiles(m, flags.Args(), save, onRejected, terminalOrNil(os.Stderr))
 	if err != nil {
 		return err
 	}
-	res.print(os.Stdout, *dryRun)
 	if *dryRun {
-		fmt.Println("dry run: model not saved")
-		return nil
+		summary = "Dry run, nothing saved. " + summary
 	}
-	if err := m.Save(*modelPath); err != nil {
-		return fmt.Errorf("saving model: %w", err)
-	}
-	fmt.Printf("%s now knows %d usernames\n", *modelPath, len(m.Names()))
+	fmt.Println(summary)
 	return nil
 }
 
-// trainResult tallies one training run.
-type trainResult struct {
-	added, known int
-	rejected     map[string]int // garbage reason → count
-}
-
-// learnFiles teaches m every username in paths. If rejectedOut is non-nil,
-// each garbage username is listed there with the reason.
-func learnFiles(m *markov.Model, paths []string, rejectedOut io.Writer) (trainResult, error) {
-	res := trainResult{rejected: map[string]int{}}
+// trainFiles teaches m every username in paths ("-" is stdin), drawing a
+// progress bar on bar (nil for none), then saves m to save unless it is "".
+// It returns a one-line summary.
+func trainFiles(m *markov.Model, paths []string, save string, onRejected func(name, reason string), bar io.Writer) (string, error) {
+	var total int64
 	for _, path := range paths {
-		err := eachName(path, func(name string) {
-			ok, err := m.Learn(name)
-			var garbage *markov.GarbageError
-			switch {
-			case errors.As(err, &garbage):
-				res.rejected[garbage.Reason]++
-				if rejectedOut != nil {
-					fmt.Fprintf(rejectedOut, "rejected %q: %s\n", name, garbage.Reason)
-				}
-			case ok:
-				res.added++
-			default:
-				res.known++
-			}
-		})
-		if err != nil {
-			return res, err
+		if path == "-" {
+			total = -1 // unknown
+			break
 		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", err
+		}
+		total += info.Size()
 	}
-	return res, nil
+
+	p := startProgress(bar, "Training", total)
+	res := markov.LearnResult{Rejected: map[string]int{}}
+	err := func() error {
+		for _, path := range paths {
+			r := io.Reader(os.Stdin)
+			if path != "-" {
+				f, err := os.Open(path)
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				r = f
+			}
+			got, err := m.LearnFrom(p.reader(r, 1), onRejected)
+			res.Added += got.Added
+			res.Known += got.Known
+			for reason, n := range got.Rejected {
+				res.Rejected[reason] += n
+			}
+			if err != nil {
+				return fmt.Errorf("reading %s: %w", path, err)
+			}
+		}
+		if save != "" {
+			if err := m.Save(save); err != nil {
+				return fmt.Errorf("saving model: %w", err)
+			}
+		}
+		return nil
+	}()
+	elapsed := p.end(err == nil)
+	if err != nil {
+		return "", err
+	}
+	return trainSummary(res, elapsed), nil
 }
 
-// print summarises the run, listing rejection reasons most common first.
-func (r trainResult) print(w io.Writer, dryRun bool) {
-	reasons := make([]string, 0, len(r.rejected))
-	total := 0
-	for reason, n := range r.rejected {
-		reasons = append(reasons, reason)
-		total += n
+func trainSummary(res markov.LearnResult, elapsed time.Duration) string {
+	s := fmt.Sprintf("Learned %s new usernames in %s", formatCount(res.Added), formatDuration(elapsed))
+	if skipped := res.Known + res.RejectedTotal(); skipped > 0 {
+		s += fmt.Sprintf(" (skipped %s already known, %s garbage)", formatCount(res.Known), formatCount(res.RejectedTotal()))
 	}
-	sort.Slice(reasons, func(i, j int) bool {
-		if r.rejected[reasons[i]] != r.rejected[reasons[j]] {
-			return r.rejected[reasons[i]] > r.rejected[reasons[j]]
-		}
-		return reasons[i] < reasons[j]
-	})
-
-	verb := "learned"
-	if dryRun {
-		verb = "would learn"
-	}
-	fmt.Fprintf(w, "%s %d new usernames (%d already known, %d garbage rejected)\n", verb, r.added, r.known, total)
-	for _, reason := range reasons {
-		fmt.Fprintf(w, "  %6d  %s\n", r.rejected[reason], reason)
-	}
+	return s
 }

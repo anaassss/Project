@@ -86,11 +86,15 @@ func TestCheckKeepsRealUsernames(t *testing.T) {
 func TestGenerateNeverReturnsGarbage(t *testing.T) {
 	m := trained(t, 3)
 	for _, name := range []string{"Zed4444Zed", "Bob_12_34", "Mxyzptlk"} {
-		m.learn(name) // bypass Check to give the chain garbage-prone patterns
+		m.tally.add(m.order, name, nil) // bypass Check to give the chain garbage-prone patterns
 	}
+	m.table.Store(nil)
 	names, err := m.Generate(rng(), 300, GenerateOptions{MinLen: 1, MaxLen: 40, Temperature: 3, Order: 1})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(names) == 0 {
+		t.Fatal("generated nothing")
 	}
 	for _, name := range names {
 		if err := Check(name); err != nil {
@@ -99,24 +103,23 @@ func TestGenerateNeverReturnsGarbage(t *testing.T) {
 	}
 }
 
-func TestCleanDropsGarbage(t *testing.T) {
-	m := trained(t, 3)
-	want := m.Contexts()
-	for _, name := range []string{"asdfghjkl", "user_123"} {
-		m.learn(name) // as a model trained before the garbage rules would have
-	}
-	if m.Contexts() == want {
-		t.Fatal("test setup did not add any patterns")
-	}
-
-	dropped := m.Clean()
-	if strings.Join(dropped, ",") != "asdfghjkl,user_123" {
-		t.Errorf("Clean dropped %v", dropped)
-	}
-	if m.Contexts() != want || len(m.Names()) != len(training) || m.Knows("asdfghjkl") {
-		t.Error("Clean did not restore the model trained on clean names only")
-	}
-	if dropped := m.Clean(); len(dropped) != 0 {
-		t.Errorf("second Clean dropped %v", dropped)
+func TestSplit(t *testing.T) {
+	for name, want := range map[string]string{
+		"ShadowWolf":    "Shadow|Wolf",
+		"xXSniperXx":    "x|X|Sniper|Xx",
+		"Dark_Wolf_99":  "Dark|_|Wolf|_|99",
+		"XMLParser":     "XML|Parser",
+		"coolguy":       "coolguy",
+		"CyberPunk2077": "Cyber|Punk|2077",
+		"john.doe":      "john|.|doe",
+		"":              "",
+	} {
+		var got []string
+		for _, seg := range Split(name) {
+			got = append(got, seg.Text)
+		}
+		if strings.Join(got, "|") != want {
+			t.Errorf("Split(%q) = %s, want %s", name, strings.Join(got, "|"), want)
+		}
 	}
 }

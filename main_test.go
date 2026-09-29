@@ -3,10 +3,17 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 )
+
+// repoRoot is the package directory, captured before tests change directory.
+var repoRoot = func() string {
+	wd, _ := os.Getwd()
+	return wd
+}()
 
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
@@ -36,34 +43,46 @@ func TestMenuTrainThenEdit(t *testing.T) {
 	input := strings.Join([]string{
 		"2",              // edit before training: refused
 		"1", "names.txt", // train
-		"2", "to\\ edit.txt", "abc", "4", // edit, invalid then 4 edits each
+		"1", "names.txt", // train again: all already known
+		"2", `to\ edit.txt`, // edit
 		"0",
 	}, "\n") + "\n"
 	var out strings.Builder
-	if err := menu(strings.NewReader(input), &out, "model.json"); err != nil {
+	if err := menu(strings.NewReader(input), &out, "model"); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
 	for _, want := range []string{
 		"Nothing learned yet",
-		"learned 155 new usernames",
-		"model.json now knows 155 usernames",
-		"Enter a whole number above 0",
-		"Saved 8 edited usernames to edited_8.txt",
+		"Training [██████████████████████████████] 100%",
+		"Learned 155 new usernames in ",
+		"Learned 0 new usernames in ",
+		"(skipped 155 already known, 0 garbage)",
+		"Editing  [██████████████████████████████] 100%",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("menu output missing %q:\n%s", want, got)
 		}
 	}
 
-	edits := readLines(t, "edited_8.txt")
-	if len(edits) != 8 {
-		t.Fatalf("edited_8.txt has %d lines, want 8", len(edits))
+	saved := regexp.MustCompile(`Saved (\d+) edited usernames to (edited_\d+\.txt) in `).FindStringSubmatch(got)
+	if saved == nil {
+		t.Fatalf("no edits saved:\n%s", got)
+	}
+	if want := "edited_" + saved[1] + ".txt"; saved[2] != want {
+		t.Errorf("saved to %s, want %s", saved[2], want)
+	}
+	edits := readLines(t, saved[2])
+	if len(edits) == 0 || len(edits) > 20 {
+		t.Fatalf("%s has %d lines, want 1-20", saved[2], len(edits))
 	}
 	for _, ed := range edits {
 		if strings.EqualFold(ed, "ShadowFox") || strings.EqualFold(ed, "DarkWolf_7") {
 			t.Errorf("edited file contains input name %q", ed)
 		}
+	}
+	if _, err := os.Stat("model"); err != nil {
+		t.Errorf("model not saved: %v", err)
 	}
 }
 
@@ -71,30 +90,31 @@ func TestMenuSurvivesErrorsAndEOF(t *testing.T) {
 	t.Chdir(t.TempDir())
 	var out strings.Builder
 	// A missing file is reported and the menu continues; input then ends.
-	if err := menu(strings.NewReader("1\nmissing.txt\n7\n"), &out, "model.json"); err != nil {
+	if err := menu(strings.NewReader("1\nmissing.txt\n7\n"), &out, "model"); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); !strings.Contains(got, "Error: open missing.txt") || !strings.Contains(got, `"7" is not an option`) {
+	if got := out.String(); !strings.Contains(got, "Error: stat missing.txt") || !strings.Contains(got, "Choose 1, 2 or 0.") {
 		t.Errorf("unexpected output:\n%s", got)
 	}
 }
 
-func TestWriteEditedNeverOverwrites(t *testing.T) {
+func TestPlaceEditedNeverOverwrites(t *testing.T) {
 	dir := t.TempDir()
-	names := []string{"NightFox", "ShadowHawk"}
-	var paths []string
-	for range 3 {
-		p, err := writeEdited(dir, names)
+	var got []string
+	for i := range 3 {
+		tmp := filepath.Join(dir, "tmp")
+		writeFile(t, tmp, strings.Repeat("x", i))
+		p, err := placeEdited(tmp, dir, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
-		paths = append(paths, filepath.Base(p))
+		got = append(got, filepath.Base(p))
 	}
-	if want := []string{"edited_2.txt", "edited_2_2.txt", "edited_2_3.txt"}; !slices.Equal(paths, want) {
-		t.Errorf("wrote %v, want %v", paths, want)
+	if want := []string{"edited_2.txt", "edited_2_2.txt", "edited_2_3.txt"}; !slices.Equal(got, want) {
+		t.Errorf("wrote %v, want %v", got, want)
 	}
-	if got := readLines(t, filepath.Join(dir, "edited_2.txt")); !slices.Equal(got, names) {
-		t.Errorf("edited_2.txt = %v, want %v", got, names)
+	if data, _ := os.ReadFile(filepath.Join(dir, "edited_2.txt")); len(data) != 0 {
+		t.Error("edited_2.txt was overwritten")
 	}
 }
 
@@ -114,8 +134,10 @@ func TestCleanPath(t *testing.T) {
 	}
 }
 
-// repoRoot is the package directory, captured before tests change directory.
-var repoRoot = func() string {
-	wd, _ := os.Getwd()
-	return wd
-}()
+func TestFormatCount(t *testing.T) {
+	for n, want := range map[int]string{0: "0", 999: "999", 1000: "1,000", 1234567: "1,234,567", -1234: "-1,234"} {
+		if got := formatCount(n); got != want {
+			t.Errorf("formatCount(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

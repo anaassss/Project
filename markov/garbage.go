@@ -49,35 +49,43 @@ var placeholders = map[string]bool{
 	"undefined": true, "unknown": true, "user": true, "username": true,
 }
 
-// sequences are keyboard rows and the alphabet, forwards and backwards.
-var sequences = func() []string {
-	var seqs []string
+// sequences holds every run of sequenceLen letters along a keyboard row or
+// the alphabet, forwards and backwards, so Check can look each window up.
+var sequences = func() map[string]bool {
+	seqs := map[string]bool{}
 	for _, s := range []string{"qwertyuiop", "asdfghjkl", "zxcvbnm", "abcdefghijklmnopqrstuvwxyz"} {
 		r := []rune(s)
-		slices.Reverse(r)
-		seqs = append(seqs, s, string(r))
+		rev := slices.Clone(r)
+		slices.Reverse(rev)
+		for i := 0; i+sequenceLen <= len(r); i++ {
+			seqs[string(r[i:i+sequenceLen])] = true
+			seqs[string(rev[i:i+sequenceLen])] = true
+		}
 	}
 	return seqs
 }()
 
 // Check returns a *GarbageError if name is not worth learning from.
 // Usernames may contain letters in any script, digits, '_', '-' and '.'.
+// Check allocates nothing for valid ASCII names, since it runs on every
+// candidate edit.
 func Check(name string) error {
 	reject := func(reason string) error { return &GarbageError{Reason: reason} }
 
 	if !utf8.ValidString(name) {
 		return reject("not valid UTF-8")
 	}
-	runes := []rune(name)
-	if len(runes) < MinNameLen {
+	n := utf8.RuneCountInString(name)
+	if n < MinNameLen {
 		return reject("too short")
 	}
-	if len(runes) > MaxNameLen {
+	if n > MaxNameLen {
 		return reject("too long")
 	}
 
-	letters := 0
-	for _, r := range runes {
+	letters, ascii := 0, true
+	for _, r := range name {
+		ascii = ascii && r < utf8.RuneSelf
 		switch {
 		case unicode.IsLetter(r):
 			letters++
@@ -87,30 +95,47 @@ func Check(name string) error {
 		}
 	}
 
-	lower := strings.ToLower(name)
-	if placeholders[strings.TrimRight(lower, "0123456789_-.")] {
+	// A lowercase copy, kept on the stack for ASCII names.
+	var buf [MaxNameLen]byte
+	var lower []byte
+	if ascii {
+		lower = buf[:len(name)]
+		for i := range len(name) {
+			c := name[i]
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			lower[i] = c
+		}
+	} else {
+		lower = []byte(strings.ToLower(name))
+	}
+
+	base := len(lower)
+	for base > 0 && strings.IndexByte("0123456789_-.", lower[base-1]) >= 0 {
+		base--
+	}
+	if placeholders[string(lower[:base])] {
 		return reject("placeholder or auto-generated")
 	}
-	if letters*2 < len(runes) {
+	if letters*2 < n {
 		return reject("mostly digits or symbols")
 	}
 	if isHexID(lower) {
 		return reject("looks like an ID")
 	}
-	for _, seq := range sequences {
-		for i := 0; i+sequenceLen <= len(seq); i++ {
-			if strings.Contains(lower, seq[i:i+sequenceLen]) {
-				return reject("keyboard or alphabet sequence")
-			}
+	// The sequences are ASCII, so byte windows find them even in UTF-8.
+	for i := 0; i+sequenceLen <= len(lower); i++ {
+		if sequences[string(lower[i:i+sequenceLen])] {
+			return reject("keyboard or alphabet sequence")
 		}
 	}
-
-	if repeats([]rune(lower)) {
+	if (ascii && repeats(lower)) || (!ascii && repeats([]rune(string(lower)))) {
 		return reject("repeated pattern")
 	}
 
 	digitRun, consonantRun, latin, vowels := 0, 0, 0, 0
-	for _, r := range runes {
+	for _, r := range name {
 		if unicode.IsDigit(r) {
 			if digitRun++; digitRun > maxDigitRun {
 				return reject("long run of digits")
@@ -121,7 +146,7 @@ func Check(name string) error {
 
 		if r < utf8.RuneSelf && unicode.IsLetter(r) {
 			latin++
-			if strings.ContainsRune("aeiouyAEIOUY", r) {
+			if strings.IndexByte("aeiouyAEIOUY", byte(r)) >= 0 {
 				vowels++
 				consonantRun = 0
 			} else if consonantRun++; consonantRun > maxConsonantRun {
@@ -138,7 +163,7 @@ func Check(name string) error {
 	return nil
 }
 
-func isHexID(s string) bool {
+func isHexID(s []byte) bool {
 	if len(s) < minHexIDLen {
 		return false
 	}
@@ -157,7 +182,7 @@ func isHexID(s string) bool {
 // repeats reports whether a chunk of 1-3 characters repeats back to back more
 // often than real names do. Only whole repeats count: "anana" in "Banana" is
 // "an" 2.5 times and allowed, "hahaha" is "ha" 3 times and rejected.
-func repeats(runes []rune) bool {
+func repeats[T byte | rune](runes []T) bool {
 	for size := 1; size <= 3; size++ {
 		limit := maxChunkRepeat
 		if size == 1 {
