@@ -3,10 +3,12 @@ package markov
 import (
 	"errors"
 	"io/fs"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -173,5 +175,51 @@ func TestLoadRejectsBadFiles(t *testing.T) {
 		if wantOK := name == "trailing ok"; (err == nil) != wantOK {
 			t.Errorf("%s: Load error = %v, want ok=%v", name, err, wantOK)
 		}
+	}
+}
+
+func TestScoreRanksPlausibleAboveGarbage(t *testing.T) {
+	m := trained(t, 3)
+	if good, bad := m.Score("ShadowHawk"), m.Score("Qzxwvk"); good <= bad {
+		t.Errorf("Score(ShadowHawk) = %.2f, not above Score(Qzxwvk) = %.2f", good, bad)
+	}
+}
+
+func TestHeldOutScores(t *testing.T) {
+	m := trained(t, 3)
+	held := m.HeldOutScores()
+	if len(held) != len(training) {
+		t.Fatalf("got %d held-out scores, want %d", len(held), len(training))
+	}
+	for i, name := range m.Names() {
+		if in := m.Score(name); held[i] >= in {
+			t.Errorf("%s: held-out score %.2f not below in-sample %.2f", name, held[i], in)
+		}
+	}
+
+	// Holding out a lone name leaves nothing learned: every character backs off
+	// through all 3 context lengths (order 2, 1, 0) and is then unseen.
+	one, _ := New(2)
+	one.Learn("Solo")
+	if got, want := one.HeldOutScores()[0], 3*backoffPenalty+unseenPenalty; math.Abs(got-want) > 1e-9 {
+		t.Errorf("lone held-out score = %v, want %v", got, want)
+	}
+}
+
+func TestComplete(t *testing.T) {
+	m := trained(t, 3)
+	r := rng()
+	for range 50 {
+		got, ok := m.Complete(r, "Shadow", 12)
+		if !ok {
+			continue
+		}
+		if !strings.HasPrefix(got, "Shadow") || len([]rune(got)) <= len("Shadow") || len([]rune(got)) > 12 {
+			t.Errorf("Complete(Shadow, 12) = %q", got)
+		}
+	}
+	// A full learned name must still be extended, not ended immediately.
+	if got, ok := m.Complete(r, "ShadowWolf", 30); ok && got == "ShadowWolf" {
+		t.Error("Complete returned the prefix unchanged")
 	}
 }

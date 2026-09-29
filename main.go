@@ -1,6 +1,10 @@
-// Command usergen learns how usernames are built from example lists and
-// generates new ones. What it learns is saved to a model file, and every
-// training run adds to the existing model instead of starting over.
+// Command usergen learns how usernames are built from example lists and uses
+// that knowledge to edit usernames you give it into new ones. What it learns
+// is saved to a model file, and every training run adds to the existing model
+// instead of starting over.
+//
+// Run it without arguments for an interactive menu with its two modules,
+// Training and Edit, or use the subcommands below from scripts.
 package main
 
 import (
@@ -12,18 +16,22 @@ import (
 	"io/fs"
 	"math/rand/v2"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/anaassss/Project/markov"
 )
 
-const defaultModel = "usergen.json"
+const (
+	defaultModel = "usergen.json"
+	defaultOrder = 3
+)
 
-const usage = `usergen learns how usernames are built and generates new ones.
+const usage = `usergen learns how usernames are built and edits usernames into new ones.
 
 Usage:
+  usergen                            interactive menu: 1 - Training, 2 - Edit
   usergen train    [flags] FILE...   learn from username lists (one per line, "-" for stdin)
+  usergen edit     [flags] FILE      edit each username in FILE; saves edited_<count>.txt
   usergen generate [flags]           generate new usernames from the saved model
   usergen stats    [flags]           show what the saved model has learned
   usergen clean    [flags]           remove garbage usernames from the saved model
@@ -36,13 +44,20 @@ Run "usergen <command> -h" for a command's flags.
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		if err := menu(os.Stdin, os.Stdout, defaultModel); err != nil {
+			fmt.Fprintln(os.Stderr, "usergen:", err)
+			os.Exit(1)
+		}
+		return
 	}
 	var err error
 	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
+	case "menu":
+		err = menuCommand(args)
 	case "train":
 		err = train(args)
+	case "edit":
+		err = editCommand(args)
 	case "generate", "gen":
 		err = generate(args)
 	case "stats":
@@ -62,98 +77,12 @@ func main() {
 	}
 }
 
-func train(args []string) error {
-	flags := flag.NewFlagSet("train", flag.ExitOnError)
-	modelPath := flags.String("model", defaultModel, "model file to load and save")
-	order := flags.Int("order", 3, "characters of context to learn (only when creating a new model)")
-	showRejected := flags.Bool("show-rejected", false, "list every garbage username skipped, with the reason")
-	dryRun := flags.Bool("dry-run", false, "report what would be learned without saving the model")
-	flags.Parse(args)
-	if flags.NArg() == 0 {
-		return errors.New("train needs at least one file of usernames (or - for stdin)")
-	}
-	orderSet := false
-	flags.Visit(func(f *flag.Flag) { orderSet = orderSet || f.Name == "order" })
-
-	m, created, err := loadOrCreate(*modelPath, *order)
-	if err != nil {
-		return err
-	}
-	if !created && orderSet && *order != m.Order() {
-		return fmt.Errorf("%s was trained with order %d; use a different -model to train with order %d",
-			*modelPath, m.Order(), *order)
-	}
-
-	var added, known int
-	rejected := map[string]int{}
-	for _, path := range flags.Args() {
-		err := eachName(path, func(name string) {
-			ok, err := m.Learn(name)
-			var garbage *markov.GarbageError
-			switch {
-			case errors.As(err, &garbage):
-				rejected[garbage.Reason]++
-				if *showRejected {
-					fmt.Fprintf(os.Stderr, "rejected %q: %s\n", name, garbage.Reason)
-				}
-			case ok:
-				added++
-			default:
-				known++
-			}
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	total := 0
-	for _, n := range rejected {
-		total += n
-	}
-	verb := "learned"
-	if *dryRun {
-		verb = "would learn"
-	}
-	fmt.Printf("%s %d new usernames (%d already known, %d garbage rejected)\n", verb, added, known, total)
-	printReasons(rejected)
-	if *dryRun {
-		fmt.Println("dry run: model not saved")
-		return nil
-	}
-	if err := m.Save(*modelPath); err != nil {
-		return fmt.Errorf("saving model: %w", err)
-	}
-	fmt.Printf("%s now knows %d usernames\n", *modelPath, len(m.Names()))
-	return nil
-}
-
-// printReasons lists rejection reasons, most common first.
-func printReasons(counts map[string]int) {
-	reasons := make([]string, 0, len(counts))
-	for r := range counts {
-		reasons = append(reasons, r)
-	}
-	sort.Slice(reasons, func(i, j int) bool {
-		if counts[reasons[i]] != counts[reasons[j]] {
-			return counts[reasons[i]] > counts[reasons[j]]
-		}
-		return reasons[i] < reasons[j]
-	})
-	for _, r := range reasons {
-		fmt.Printf("  %6d  %s\n", counts[r], r)
-	}
-}
-
 func clean(args []string) error {
 	flags := flag.NewFlagSet("clean", flag.ExitOnError)
 	modelPath := flags.String("model", defaultModel, "model file to clean")
 	flags.Parse(args)
 
-	m, err := markov.Load(*modelPath)
-	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("no model at %s; run \"usergen train FILE\" first", *modelPath)
-	}
+	m, err := loadModel(*modelPath)
 	if err != nil {
 		return err
 	}
@@ -178,6 +107,19 @@ func reason(name string) string {
 		return garbage.Reason
 	}
 	return "garbage"
+}
+
+// errNoModel reports that nothing has been learned yet.
+var errNoModel = errors.New("nothing learned yet")
+
+// loadModel loads the model at path, returning an error wrapping errNoModel
+// if it does not exist.
+func loadModel(path string) (*markov.Model, error) {
+	m, err := markov.Load(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%w: no model at %s; train on a file of usernames first", errNoModel, path)
+	}
+	return m, err
 }
 
 func loadOrCreate(path string, order int) (*markov.Model, bool, error) {
@@ -229,19 +171,12 @@ func generate(args []string) error {
 	allowKnown := flags.Bool("allow-known", false, "allow usernames that appear in the training data")
 	flags.Parse(args)
 
-	m, err := markov.Load(*modelPath)
-	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("no model at %s; run \"usergen train FILE\" first", *modelPath)
-	}
+	m, err := loadModel(*modelPath)
 	if err != nil {
 		return err
 	}
 
-	s := *seed
-	if s == 0 {
-		s = rand.Uint64()
-	}
-	names, err := m.Generate(rand.New(rand.NewPCG(s, s)), *n, markov.GenerateOptions{
+	names, err := m.Generate(newRand(*seed), *n, markov.GenerateOptions{
 		MinLen:      *minLen,
 		MaxLen:      *maxLen,
 		Temperature: *temp,
@@ -265,10 +200,7 @@ func stats(args []string) error {
 	modelPath := flags.String("model", defaultModel, "model file to inspect")
 	flags.Parse(args)
 
-	m, err := markov.Load(*modelPath)
-	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("no model at %s; run \"usergen train FILE\" first", *modelPath)
-	}
+	m, err := loadModel(*modelPath)
 	if err != nil {
 		return err
 	}
@@ -293,4 +225,12 @@ func stats(args []string) error {
 		fmt.Printf("length:    %d-%d characters, average %.1f\n", shortest, longest, float64(total)/float64(len(names)))
 	}
 	return nil
+}
+
+// newRand returns a generator seeded with seed, or randomly if seed is 0.
+func newRand(seed uint64) *rand.Rand {
+	if seed == 0 {
+		seed = rand.Uint64()
+	}
+	return rand.New(rand.NewPCG(seed, seed))
 }

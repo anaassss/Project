@@ -29,6 +29,13 @@ const (
 	// they can never collide with a real username character.
 	startRune = '\x02'
 	endRune   = '\x03'
+
+	// backoffPenalty is the log-weight Score applies each time it falls back
+	// to a shorter context ("stupid backoff", weight 0.4).
+	backoffPenalty = -0.916290731874155
+	// unseenPenalty is the log-weight Score gives a character the model has
+	// never seen at all.
+	unseenPenalty = -13.815510557964274 // log(1e-6)
 )
 
 // Model counts, for every context of 0..order preceding characters, how often
@@ -36,6 +43,7 @@ const (
 type Model struct {
 	order  int
 	counts map[string]map[rune]int
+	totals map[string]int      // sum of each counts row, for Score
 	names  []string            // every learned name, in learning order
 	seen   map[string]struct{} // lowercased names, for dedupe and novelty
 }
@@ -45,11 +53,16 @@ func New(order int) (*Model, error) {
 	if order < 1 || order > MaxOrder {
 		return nil, fmt.Errorf("order must be between 1 and %d, got %d", MaxOrder, order)
 	}
+	return newModel(order), nil
+}
+
+func newModel(order int) *Model {
 	return &Model{
 		order:  order,
 		counts: make(map[string]map[rune]int),
+		totals: make(map[string]int),
 		seen:   make(map[string]struct{}),
-	}, nil
+	}
 }
 
 // Order reports the longest context the model was trained with.
@@ -83,14 +96,7 @@ func (m *Model) Learn(name string) (bool, error) {
 
 // learn counts name's transitions without checking it.
 func (m *Model) learn(name string) {
-	runes := []rune(name)
-	padded := make([]rune, 0, m.order+len(runes)+1)
-	for range m.order {
-		padded = append(padded, startRune)
-	}
-	padded = append(padded, runes...)
-	padded = append(padded, endRune)
-
+	padded := m.pad(name)
 	for i := m.order; i < len(padded); i++ {
 		next := padded[i]
 		for k := 0; k <= m.order; k++ {
@@ -101,6 +107,7 @@ func (m *Model) learn(name string) {
 				m.counts[ctx] = row
 			}
 			row[next]++
+			m.totals[ctx]++
 		}
 	}
 
@@ -108,15 +115,72 @@ func (m *Model) learn(name string) {
 	m.names = append(m.names, name)
 }
 
+// pad surrounds name with start and end markers so the first and last
+// characters have contexts too.
+func (m *Model) pad(name string) []rune {
+	runes := []rune(name)
+	padded := make([]rune, 0, m.order+len(runes)+1)
+	for range m.order {
+		padded = append(padded, startRune)
+	}
+	padded = append(padded, runes...)
+	return append(padded, endRune)
+}
+
+// Score rates how well name fits what the model has learned: the average log
+// probability of each character (and of the name ending there) given the
+// characters before it. When the full context never preceded a character it
+// backs off to shorter contexts with a penalty. Higher is more typical.
+func (m *Model) Score(name string) float64 {
+	return m.score(name, nil)
+}
+
+// HeldOutScores returns, for each learned name, the Score it would get had
+// the model never learned it. Learned names score unrealistically well on
+// their own patterns; these scores show what a genuinely new but typical
+// username scores.
+func (m *Model) HeldOutScores() []float64 {
+	scores := make([]float64, len(m.names))
+	for i, name := range m.names {
+		own := newModel(m.order)
+		own.learn(name)
+		scores[i] = m.score(name, own)
+	}
+	return scores
+}
+
+// score implements Score, ignoring the counts in exclude if it is non-nil.
+func (m *Model) score(name string, exclude *Model) float64 {
+	padded := m.pad(name)
+	var total float64
+	for i := m.order; i < len(padded); i++ {
+		total += m.logProb(padded[i-m.order:i], padded[i], exclude)
+	}
+	return total / float64(len(padded)-m.order)
+}
+
+func (m *Model) logProb(ctx []rune, next rune, exclude *Model) float64 {
+	var penalty float64
+	for k := len(ctx); k >= 0; k-- {
+		key := string(ctx[len(ctx)-k:])
+		c, total := m.counts[key][next], m.totals[key]
+		if exclude != nil {
+			c -= exclude.counts[key][next]
+			total -= exclude.totals[key]
+		}
+		if c > 0 {
+			return penalty + math.Log(float64(c)/float64(total))
+		}
+		penalty += backoffPenalty
+	}
+	return penalty + unseenPenalty
+}
+
 // Clean rebuilds the model from only the learned names that pass Check,
 // removing anything learned before the current garbage rules, and returns
 // the names it dropped.
 func (m *Model) Clean() []string {
-	clean := &Model{
-		order:  m.order,
-		counts: make(map[string]map[rune]int),
-		seen:   make(map[string]struct{}),
-	}
+	clean := newModel(m.order)
 	var dropped []string
 	for _, name := range m.names {
 		if Check(name) != nil {
@@ -197,41 +261,65 @@ func (m *Model) Generate(rng *rand.Rand, n int, opts GenerateOptions) ([]string,
 
 // sample walks the chain once, returning false if the result is out of bounds.
 func (m *Model) sample(rng *rand.Rand, opts GenerateOptions) (string, bool) {
-	ctx := make([]rune, opts.Order)
-	for i := range ctx {
-		ctx[i] = startRune
-	}
-	var out []rune
-	for {
-		next, ok := m.next(rng, ctx, opts.Temperature)
-		if !ok || next == endRune {
-			break
-		}
-		out = append(out, next)
-		if len(out) > opts.MaxLen {
-			return "", false
-		}
-		copy(ctx, ctx[1:])
-		ctx[len(ctx)-1] = next
-	}
-	if len(out) < opts.MinLen {
+	out, ok := m.walk(rng, nil, 0, opts.Order, opts.Temperature, opts.MaxLen)
+	if !ok || len(out) < opts.MinLen {
 		return "", false
 	}
 	return string(out), true
 }
 
+// Complete keeps prefix and lets the model write the rest of the name, adding
+// at least one character. It returns false if the result would be longer than
+// maxLen characters.
+func (m *Model) Complete(rng *rand.Rand, prefix string, maxLen int) (string, bool) {
+	out, ok := m.walk(rng, []rune(prefix), 1, m.order, 1, maxLen)
+	return string(out), ok
+}
+
+// walk extends prefix one sampled character at a time until the model ends
+// the name, not allowing an end before minNew characters have been added.
+func (m *Model) walk(rng *rand.Rand, prefix []rune, minNew, order int, temperature float64, maxLen int) ([]rune, bool) {
+	ctx := make([]rune, order)
+	for i := range ctx {
+		ctx[i] = startRune
+	}
+	push := func(r rune) {
+		copy(ctx, ctx[1:])
+		ctx[len(ctx)-1] = r
+	}
+	for _, r := range prefix {
+		push(r)
+	}
+	out := append([]rune(nil), prefix...)
+	for {
+		next, ok := m.next(rng, ctx, temperature, len(out)-len(prefix) >= minNew)
+		if !ok || next == endRune {
+			break
+		}
+		out = append(out, next)
+		if len(out) > maxLen {
+			return nil, false
+		}
+		push(next)
+	}
+	return out, true
+}
+
 // next samples the character following ctx, backing off to shorter contexts
-// when the full one was never observed.
-func (m *Model) next(rng *rand.Rand, ctx []rune, temperature float64) (rune, bool) {
+// when the full one was never observed (or, if !allowEnd, was only ever
+// followed by the end of a name).
+func (m *Model) next(rng *rand.Rand, ctx []rune, temperature float64, allowEnd bool) (rune, bool) {
 	for k := len(ctx); k >= 0; k-- {
 		row := m.counts[string(ctx[len(ctx)-k:])]
-		if len(row) == 0 {
-			continue
-		}
 		// Sort so a fixed seed always yields the same names.
 		candidates := make([]rune, 0, len(row))
 		for r := range row {
-			candidates = append(candidates, r)
+			if allowEnd || r != endRune {
+				candidates = append(candidates, r)
+			}
+		}
+		if len(candidates) == 0 {
+			continue
 		}
 		sort.Slice(candidates, func(i, j int) bool { return candidates[i] < candidates[j] })
 
@@ -336,6 +424,7 @@ func Load(path string) (*Model, error) {
 				return nil, fmt.Errorf("%s: corrupt count %q=%d in context %q", path, s, c, ctx)
 			}
 			counts[r] = c
+			m.totals[ctx] += c
 		}
 		m.counts[ctx] = counts
 	}
