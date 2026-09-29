@@ -16,6 +16,29 @@ Names are deduplicated case-insensitively, so training on the same list twice
 does not skew the model. Generated names that match a training name are
 discarded unless you pass `-allow-known`.
 
+## Garbage filtering
+
+Scraped username lists are full of junk that would teach the model bad habits.
+Garbage is never learned, and generated names go through the same filter, so
+usergen never outputs a name it would refuse to learn from. A name is rejected
+if it:
+
+| Rule | Rejected examples |
+|------|-------------------|
+| is outside 3–24 characters | `x`, `ThisIsAReallyLongUsernameThatNobodyUses` |
+| has anything but letters, digits, `_`, `-`, `.` | `john@gmail.com`, `[deleted]`, `cool😎guy`, `has space` |
+| is a placeholder or default account name | `deleted`, `AutoModerator`, `user_83921`, `Player7` |
+| is less than half letters | `12345678`, `Johnny99887766` |
+| looks like a hex ID | `8f3a9c2b1e` |
+| contains a keyboard row or alphabet run of 5 | `asdfghjkl`, `qwerty123`, `abcdefg` |
+| repeats a character 4+ times or a 2–3 character chunk 3+ times | `aaaaaa`, `NooooOob`, `hahaha`, `lolololol` |
+| has 5 or more digits in a row | `xX_Sniper_12345` |
+| has 7+ consonants in a row, or 6+ Latin letters with no vowel | `xkcdfjgh`, `x_k_c_d_f_g` |
+
+Letters from any script are allowed, and real names such as `FirstStrike`,
+`CyberPunk2077`, `L33tH4x0r`, `BananaSplit` and `xX_Reaper_Xx` pass. The
+rules catch structural junk, not taste: a pronounceable but ugly name passes.
+
 ## Usage
 
 ```sh
@@ -27,6 +50,12 @@ go build -o usergen .
 # Keep teaching it later; the saved model is loaded and extended
 ./usergen train more_names.txt
 cat scraped.txt | ./usergen train -
+
+# Vet a list first: see what would be rejected and why, without saving
+./usergen train -dry-run -show-rejected scraped.txt
+
+# Remove garbage from a model trained before the filter existed
+./usergen clean
 
 # Generate
 ./usergen generate -n 20
@@ -42,8 +71,10 @@ cat scraped.txt | ./usergen train -
 |------|---------|---------|
 | `-model` | all | model file to load/save (default `usergen.json`) |
 | `-order` | train | context length for a **new** model; an existing model keeps its order |
+| `-show-rejected` | train | print each garbage username skipped and why |
+| `-dry-run` | train | report what would be learned without saving |
 | `-n` | generate | how many usernames |
-| `-min`, `-max` | generate | length bounds (default 4–16) |
+| `-min`, `-max` | generate | length bounds (default 4–16; never above 24) |
 | `-temp` | generate | below 1 favours common patterns, above 1 rarer ones |
 | `-order` | generate | use less context than the model has, for more novel names |
 | `-seed` | generate | fixed seed for repeatable output (0 = random) |

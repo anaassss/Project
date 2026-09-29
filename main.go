@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"math/rand/v2"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/anaassss/Project/markov"
@@ -25,6 +26,10 @@ Usage:
   usergen train    [flags] FILE...   learn from username lists (one per line, "-" for stdin)
   usergen generate [flags]           generate new usernames from the saved model
   usergen stats    [flags]           show what the saved model has learned
+  usergen clean    [flags]           remove garbage usernames from the saved model
+
+Garbage usernames (emails, IDs, keyboard mashes, placeholders like [deleted],
+and so on) are never learned and never generated.
 
 Run "usergen <command> -h" for a command's flags.
 `
@@ -42,6 +47,8 @@ func main() {
 		err = generate(args)
 	case "stats":
 		err = stats(args)
+	case "clean":
+		err = clean(args)
 	case "-h", "-help", "--help", "help":
 		fmt.Print(usage)
 		return
@@ -59,6 +66,8 @@ func train(args []string) error {
 	flags := flag.NewFlagSet("train", flag.ExitOnError)
 	modelPath := flags.String("model", defaultModel, "model file to load and save")
 	order := flags.Int("order", 3, "characters of context to learn (only when creating a new model)")
+	showRejected := flags.Bool("show-rejected", false, "list every garbage username skipped, with the reason")
+	dryRun := flags.Bool("dry-run", false, "report what would be learned without saving the model")
 	flags.Parse(args)
 	if flags.NArg() == 0 {
 		return errors.New("train needs at least one file of usernames (or - for stdin)")
@@ -75,13 +84,18 @@ func train(args []string) error {
 			*modelPath, m.Order(), *order)
 	}
 
-	var added, known, invalid int
+	var added, known int
+	rejected := map[string]int{}
 	for _, path := range flags.Args() {
 		err := eachName(path, func(name string) {
 			ok, err := m.Learn(name)
+			var garbage *markov.GarbageError
 			switch {
-			case err != nil:
-				invalid++
+			case errors.As(err, &garbage):
+				rejected[garbage.Reason]++
+				if *showRejected {
+					fmt.Fprintf(os.Stderr, "rejected %q: %s\n", name, garbage.Reason)
+				}
 			case ok:
 				added++
 			default:
@@ -93,12 +107,77 @@ func train(args []string) error {
 		}
 	}
 
+	total := 0
+	for _, n := range rejected {
+		total += n
+	}
+	verb := "learned"
+	if *dryRun {
+		verb = "would learn"
+	}
+	fmt.Printf("%s %d new usernames (%d already known, %d garbage rejected)\n", verb, added, known, total)
+	printReasons(rejected)
+	if *dryRun {
+		fmt.Println("dry run: model not saved")
+		return nil
+	}
 	if err := m.Save(*modelPath); err != nil {
 		return fmt.Errorf("saving model: %w", err)
 	}
-	fmt.Printf("learned %d new usernames (%d already known, %d invalid skipped)\n", added, known, invalid)
 	fmt.Printf("%s now knows %d usernames\n", *modelPath, len(m.Names()))
 	return nil
+}
+
+// printReasons lists rejection reasons, most common first.
+func printReasons(counts map[string]int) {
+	reasons := make([]string, 0, len(counts))
+	for r := range counts {
+		reasons = append(reasons, r)
+	}
+	sort.Slice(reasons, func(i, j int) bool {
+		if counts[reasons[i]] != counts[reasons[j]] {
+			return counts[reasons[i]] > counts[reasons[j]]
+		}
+		return reasons[i] < reasons[j]
+	})
+	for _, r := range reasons {
+		fmt.Printf("  %6d  %s\n", counts[r], r)
+	}
+}
+
+func clean(args []string) error {
+	flags := flag.NewFlagSet("clean", flag.ExitOnError)
+	modelPath := flags.String("model", defaultModel, "model file to clean")
+	flags.Parse(args)
+
+	m, err := markov.Load(*modelPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("no model at %s; run \"usergen train FILE\" first", *modelPath)
+	}
+	if err != nil {
+		return err
+	}
+	dropped := m.Clean()
+	if len(dropped) == 0 {
+		fmt.Printf("%s has no garbage usernames\n", *modelPath)
+		return nil
+	}
+	for _, name := range dropped {
+		fmt.Fprintf(os.Stderr, "removed %q: %s\n", name, reason(name))
+	}
+	if err := m.Save(*modelPath); err != nil {
+		return fmt.Errorf("saving model: %w", err)
+	}
+	fmt.Printf("removed %d garbage usernames; %s now knows %d usernames\n", len(dropped), *modelPath, len(m.Names()))
+	return nil
+}
+
+func reason(name string) string {
+	var garbage *markov.GarbageError
+	if errors.As(markov.Check(name), &garbage) {
+		return garbage.Reason
+	}
+	return "garbage"
 }
 
 func loadOrCreate(path string, order int) (*markov.Model, bool, error) {

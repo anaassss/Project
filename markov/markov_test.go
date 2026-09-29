@@ -51,13 +51,13 @@ func TestLearnDeduplicatesCaseInsensitively(t *testing.T) {
 
 func TestLearnRejectsInvalid(t *testing.T) {
 	m, _ := New(3)
-	for _, name := range []string{"", "has space", "tab\there", "ctrl\x02", "bad\xff"} {
-		if _, err := m.Learn(name); !errors.Is(err, ErrInvalidName) {
-			t.Errorf("Learn(%q) error = %v, want ErrInvalidName", name, err)
+	for _, name := range []string{"", "has space", "tab\there", "ctrl\x02", "bad\xff", "asdfghjkl", "user_123"} {
+		if _, err := m.Learn(name); !errors.Is(err, ErrGarbage) {
+			t.Errorf("Learn(%q) error = %v, want ErrGarbage", name, err)
 		}
 	}
-	if len(m.Names()) != 0 {
-		t.Error("invalid names were learned")
+	if len(m.Names()) != 0 || m.Contexts() != 0 {
+		t.Error("garbage was learned")
 	}
 }
 
@@ -101,6 +101,7 @@ func TestGenerateRejectsBadOptions(t *testing.T) {
 	for _, opts := range []GenerateOptions{
 		{MinLen: 0, MaxLen: 10, Temperature: 1},
 		{MinLen: 8, MaxLen: 4, Temperature: 1},
+		{MinLen: MaxNameLen + 1, MaxLen: MaxNameLen + 5, Temperature: 1},
 		{MinLen: 3, MaxLen: 10, Temperature: 0},
 		{MinLen: 3, MaxLen: 10, Temperature: 1, Order: 4},
 	} {

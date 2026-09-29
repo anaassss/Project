@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -26,14 +25,11 @@ const (
 	MaxOrder = 8
 
 	// startRune and endRune pad each name so the model learns how names
-	// begin and end. Both are control characters, which Learn rejects in
-	// input, so they can never collide with a real username character.
+	// begin and end. Both are control characters, which Check rejects, so
+	// they can never collide with a real username character.
 	startRune = '\x02'
 	endRune   = '\x03'
 )
-
-// ErrInvalidName is returned by Learn for input that cannot be a username.
-var ErrInvalidName = errors.New("invalid username")
 
 // Model counts, for every context of 0..order preceding characters, how often
 // each next character follows it.
@@ -71,18 +67,22 @@ func (m *Model) Knows(name string) bool {
 	return ok
 }
 
-// Learn adds name to the model. It returns false without changing the model
-// if the name (case-insensitively) was already learned, so re-training on the
-// same list does not skew the counts.
+// Learn adds name to the model. It returns a *GarbageError without changing
+// the model if name fails Check, and false if the name (case-insensitively)
+// was already learned, so re-training on the same list does not skew counts.
 func (m *Model) Learn(name string) (bool, error) {
-	if err := validate(name); err != nil {
+	if err := Check(name); err != nil {
 		return false, err
 	}
-	key := strings.ToLower(name)
-	if _, ok := m.seen[key]; ok {
+	if m.Knows(name) {
 		return false, nil
 	}
+	m.learn(name)
+	return true, nil
+}
 
+// learn counts name's transitions without checking it.
+func (m *Model) learn(name string) {
 	runes := []rune(name)
 	padded := make([]rune, 0, m.order+len(runes)+1)
 	for range m.order {
@@ -104,24 +104,29 @@ func (m *Model) Learn(name string) (bool, error) {
 		}
 	}
 
-	m.seen[key] = struct{}{}
+	m.seen[strings.ToLower(name)] = struct{}{}
 	m.names = append(m.names, name)
-	return true, nil
 }
 
-func validate(name string) error {
-	if name == "" {
-		return fmt.Errorf("%w: empty", ErrInvalidName)
+// Clean rebuilds the model from only the learned names that pass Check,
+// removing anything learned before the current garbage rules, and returns
+// the names it dropped.
+func (m *Model) Clean() []string {
+	clean := &Model{
+		order:  m.order,
+		counts: make(map[string]map[rune]int),
+		seen:   make(map[string]struct{}),
 	}
-	if !utf8.ValidString(name) {
-		return fmt.Errorf("%w: not valid UTF-8", ErrInvalidName)
-	}
-	for _, r := range name {
-		if unicode.IsSpace(r) || unicode.IsControl(r) {
-			return fmt.Errorf("%w: %q contains whitespace or control characters", ErrInvalidName, name)
+	var dropped []string
+	for _, name := range m.names {
+		if Check(name) != nil {
+			dropped = append(dropped, name)
+			continue
 		}
+		clean.learn(name)
 	}
-	return nil
+	*m = *clean
+	return dropped
 }
 
 // GenerateOptions controls username generation.
@@ -142,9 +147,9 @@ type GenerateOptions struct {
 	AllowKnown bool
 }
 
-// Generate returns up to n distinct usernames. It returns fewer than n when
-// the model cannot produce enough distinct names satisfying opts, which
-// typically means it was trained on too few names for its order.
+// Generate returns up to n distinct usernames that pass Check. It returns
+// fewer than n when the model cannot produce enough distinct names satisfying
+// opts, which typically means it was trained on too few names for its order.
 func (m *Model) Generate(rng *rand.Rand, n int, opts GenerateOptions) ([]string, error) {
 	if len(m.names) == 0 {
 		return nil, errors.New("model has not learned any usernames yet")
@@ -157,6 +162,8 @@ func (m *Model) Generate(rng *rand.Rand, n int, opts GenerateOptions) ([]string,
 		return nil, fmt.Errorf("count must be at least 1, got %d", n)
 	case opts.MinLen < 1:
 		return nil, fmt.Errorf("minimum length must be at least 1, got %d", opts.MinLen)
+	case opts.MinLen > MaxNameLen:
+		return nil, fmt.Errorf("minimum length %d exceeds the %d-character username limit", opts.MinLen, MaxNameLen)
 	case opts.MaxLen < opts.MinLen:
 		return nil, fmt.Errorf("maximum length %d is below minimum length %d", opts.MaxLen, opts.MinLen)
 	case opts.Temperature <= 0:
@@ -177,6 +184,9 @@ func (m *Model) Generate(rng *rand.Rand, n int, opts GenerateOptions) ([]string,
 			continue
 		}
 		if !opts.AllowKnown && m.Knows(name) {
+			continue
+		}
+		if Check(name) != nil {
 			continue
 		}
 		produced[key] = struct{}{}
