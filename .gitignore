@@ -1,1 +1,9 @@
 /usergen
+
+# Your data: models, settings, and the files usergen writes.
+*.model
+usergen.json
+usergen.settings.json
+edited_*.txt
+generated_*.txt
+rejected_*.txt

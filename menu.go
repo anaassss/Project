@@ -3,9 +3,9 @@ package main
 import (
 	"bufio"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,36 +14,26 @@ import (
 	"github.com/anaassss/Project/markov"
 )
 
-const menuText = `
-  1 - Training
-  2 - Edit
-  3 - Model info
-  4 - Clear all knowledge
-  0 - Exit
-`
-
-func menuCommand(args []string) error {
-	flags := flag.NewFlagSet("menu", flag.ExitOnError)
-	modelPath := flags.String("model", defaultModel, "model file to train and edit with")
-	flags.Parse(args)
-	return menu(os.Stdin, os.Stdout, *modelPath)
-}
-
 // session is the interactive menu's state. It keeps the model in memory
 // between choices so it is only loaded once.
 type session struct {
-	r         *bufio.Reader
-	out       io.Writer
-	modelPath string
-	m         *markov.Model
+	r            *bufio.Reader
+	out          io.Writer
+	settingsPath string
+	cfg          settings
+	m            *markov.Model
 }
 
 // menu runs the interactive menu until the user exits or input ends. Problems
 // with one choice (a missing file, say) are reported and the menu continues.
-func menu(in io.Reader, out io.Writer, modelPath string) error {
-	s := &session{r: bufio.NewReader(in), out: out, modelPath: modelPath}
+func menu(in io.Reader, out io.Writer, settingsPath string) error {
+	cfg, err := loadSettings(settingsPath)
+	if err != nil {
+		fmt.Fprintf(out, "Warning: %v; using default settings.\n", err)
+	}
+	s := &session{r: bufio.NewReader(in), out: out, settingsPath: settingsPath, cfg: cfg}
 	for {
-		fmt.Fprint(out, menuText)
+		s.printMenu()
 		choice, err := s.ask("> ")
 		if errors.Is(err, io.EOF) {
 			fmt.Fprintln(out)
@@ -58,13 +48,17 @@ func menu(in io.Reader, out io.Writer, modelPath string) error {
 		case "2":
 			err = s.edit()
 		case "3":
-			err = s.info()
+			err = s.generate()
 		case "4":
+			err = s.info()
+		case "5":
+			err = s.settingsScreen()
+		case "6":
 			err = s.clear()
 		case "0", "q", "exit", "quit":
 			return nil
 		default:
-			fmt.Fprintln(out, "Choose 1, 2, 3, 4 or 0.")
+			fmt.Fprintln(out, "Choose 1-6, or 0 to exit.")
 			continue
 		}
 		if errors.Is(err, io.EOF) {
@@ -76,40 +70,96 @@ func menu(in io.Reader, out io.Writer, modelPath string) error {
 	}
 }
 
+func (s *session) printMenu() {
+	training := "Training"
+	if s.cfg.DryRun {
+		training += "   (dry run is on: nothing will be saved)"
+	}
+	fmt.Fprintf(s.out, `
+  1 - %s
+  2 - Edit
+  3 - Generate
+  4 - Model info
+  5 - Settings
+  6 - Clear all knowledge
+  0 - Exit
+`, training)
+}
+
+// loadQuiet returns the model, loading it if needed, or nil if nothing has
+// been learned yet.
+func (s *session) loadQuiet() (*markov.Model, error) {
+	if s.m == nil {
+		m, err := loadModel(s.cfg.ModelFile)
+		if errors.Is(err, errNoModel) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		s.m = m
+	}
+	return s.m, nil
+}
+
+// model loads the model if needed. It reports false, after telling the
+// user, if nothing has been learned yet.
+func (s *session) model() (bool, error) {
+	m, err := s.loadQuiet()
+	if err != nil {
+		return false, err
+	}
+	if m == nil {
+		fmt.Fprintln(s.out, "Nothing learned yet. Choose 1 - Training first.")
+		return false, nil
+	}
+	return true, nil
+}
+
 func (s *session) train() error {
 	path, err := s.askPath("File: ")
 	if err != nil {
 		return err
 	}
 	if s.m == nil {
-		if s.m, _, err = loadOrCreate(s.modelPath, defaultOrder); err != nil {
+		if s.m, _, err = loadOrCreate(s.cfg.ModelFile, s.cfg.Order); err != nil {
 			return err
 		}
 	}
-	summary, err := trainFiles(s.m, []string{path}, s.modelPath, nil, s.out)
+
+	save := s.cfg.ModelFile
+	if s.cfg.DryRun {
+		save = ""
+	}
+	var rejected *numberedFile
+	var onRejected func(name, reason string)
+	if s.cfg.SaveRejected {
+		if rejected, err = newNumberedFile(".", "rejected"); err != nil {
+			return err
+		}
+		defer rejected.discard()
+		onRejected = func(name, reason string) { rejected.writeLine(name + "\t" + reason) }
+	}
+
+	summary, err := trainFiles(s.m, []string{path}, save, onRejected, s.out)
+	if err != nil || s.cfg.DryRun {
+		s.m = nil // reload from disk next time rather than keep unsaved learning
+	}
 	if err != nil {
-		s.m = nil // reload from disk next time rather than trust a partial run
 		return err
 	}
-	fmt.Fprintln(s.out, summary)
-	return nil
-}
-
-// model loads the model if needed. It reports false, after telling the
-// user, if nothing has been learned yet.
-func (s *session) model() (bool, error) {
-	if s.m == nil {
-		m, err := loadModel(s.modelPath)
-		if errors.Is(err, errNoModel) {
-			fmt.Fprintln(s.out, "Nothing learned yet. Choose 1 - Training first.")
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		s.m = m
+	if s.cfg.DryRun {
+		summary = strings.Replace(summary, "Learned", "Dry run: would learn", 1) + ". Nothing was saved."
 	}
-	return true, nil
+	fmt.Fprintln(s.out, summary)
+	if rejected != nil && rejected.lines > 0 {
+		out, err := rejected.keep()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(s.out, "Saved %s rejected usernames, with reasons, to %s\n", formatCount(rejected.lines), out)
+	}
+	return nil
 }
 
 func (s *session) edit() error {
@@ -120,7 +170,8 @@ func (s *session) edit() error {
 	if err != nil {
 		return err
 	}
-	summary, err := editFile(s.m, path, edit.Options{Max: defaultMaxEdits}, 0, ".", s.out)
+	opts := edit.Options{Max: s.cfg.EditsPerName, AllowKnown: s.cfg.AllowKnown}
+	summary, err := editFile(s.m, path, opts, s.cfg.Seed, ".", s.out)
 	if err != nil {
 		return err
 	}
@@ -128,11 +179,60 @@ func (s *session) edit() error {
 	return nil
 }
 
+func (s *session) generate() error {
+	if ok, err := s.model(); !ok {
+		return err
+	}
+	c := s.cfg
+	seed := orRandom(c.Seed)
+	p := startProgress(s.out, "Generating", int64(c.GenCount))
+	names, err := s.m.Generate(rand.New(rand.NewPCG(seed, seed)), c.GenCount, markov.GenerateOptions{
+		MinLen:      c.GenMinLen,
+		MaxLen:      c.GenMaxLen,
+		Temperature: c.GenTemp,
+		Order:       c.GenOrder,
+		AllowKnown:  c.AllowKnown,
+		Progress:    func(found int) { p.done.Store(int64(found)) },
+	})
+	elapsed := p.end(err == nil)
+	if err != nil {
+		return err
+	}
+	if len(names) == 0 {
+		fmt.Fprintln(s.out, "No new usernames found. Train on more usernames, or raise Creativity in Settings.")
+		return nil
+	}
+
+	f, err := newNumberedFile(".", "generated")
+	if err != nil {
+		return err
+	}
+	defer f.discard()
+	for _, name := range names {
+		f.writeLine(name)
+	}
+	out, err := f.keep()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(s.out, "Saved %s new usernames to %s in %s\n", formatCount(len(names)), out, formatDuration(elapsed))
+	fmt.Fprintf(s.out, "  %s", strings.Join(names[:min(10, len(names))], ", "))
+	if len(names) > 10 {
+		fmt.Fprint(s.out, ", ...")
+	}
+	fmt.Fprintln(s.out)
+	if len(names) < c.GenCount {
+		fmt.Fprintf(s.out, "Only %s of %s found: train on more usernames, or raise Creativity or lower Context length in Settings.\n",
+			formatCount(len(names)), formatCount(c.GenCount))
+	}
+	return nil
+}
+
 func (s *session) info() error {
 	if ok, err := s.model(); !ok {
 		return err
 	}
-	describeModel(s.out, s.modelPath, s.m)
+	describeModel(s.out, s.cfg.ModelFile, s.m)
 	return nil
 }
 
@@ -149,7 +249,7 @@ func (s *session) clear() error {
 		fmt.Fprintln(s.out, "Nothing cleared.")
 		return nil
 	}
-	if err := clearModel(s.modelPath); err != nil {
+	if err := clearModel(s.cfg.ModelFile); err != nil {
 		return err
 	}
 	s.m = nil

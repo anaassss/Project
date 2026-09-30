@@ -12,8 +12,10 @@ go build -o usergen .
 ```
   1 - Training
   2 - Edit
-  3 - Model info
-  4 - Clear all knowledge
+  3 - Generate
+  4 - Model info
+  5 - Settings
+  6 - Clear all knowledge
   0 - Exit
 > 1
 File: names.txt
@@ -25,14 +27,14 @@ File: mine.txt
 Editing  [██████████████████████████████] 100%
 Saved 6,224,124 edited usernames to edited_6224124.txt in 5s
 
-> 3
+> 4
   Model file   usergen.model (8.7 MB)
   Usernames    1,001,559 learned, 6-24 characters (average 12.9)
   Patterns     105,964, using 3 characters of context
   Words        228; most common: xx, man, code, owl, star, shadow, starter, sneaky, titan, ghostly
   Numbers      106; most common: 69, 88, 99, 53, 22, 26, 74, 77, 27, 72
 
-> 4
+> 6
 This erases everything learned (1,001,559 usernames) and cannot be undone. Type yes to confirm: yes
 All knowledge cleared.
 ```
@@ -42,10 +44,50 @@ All knowledge cleared.
    starting over.
 2. **Edit** turns every username in a file into up to 10 new ones and saves
    them to `edited_<count>.txt`.
-3. **Model info** shows what the model has learned: how many usernames,
+3. **Generate** makes brand-new usernames from scratch and saves them to
+   `generated_<count>.txt`, showing the first few.
+4. **Model info** shows what the model has learned: how many usernames,
    patterns, words and numbers, and the most common ones.
-4. **Clear all knowledge** deletes the model after you type `yes`, so the
+5. **Settings** changes how the other options work (below).
+6. **Clear all knowledge** deletes the model after you type `yes`, so the
    next training starts from nothing.
+
+## Settings
+
+Choose a number to change a setting; on/off settings flip straight away.
+Settings are saved to `usergen.settings.json` and remembered next time.
+
+```
+Settings (saved in usergen.settings.json)
+  Training
+    1  Context length for a new model (1-8)           3
+    2  Save rejected usernames to a file              off
+    3  Dry run: learn nothing, just report            off
+  Edit
+    4  Edits per username                             10
+  Generate
+    5  How many usernames                             10
+    6  Shortest length                                4
+    7  Longest length                                 16
+    8  Creativity (1 = as learned, higher = wilder)   1
+    9  Context length (0 = the model's)               0
+  Edit and Generate
+   10  Allow usernames the model learned from         off
+   11  Seed (0 = random each time)                    0
+  Model
+   12  Model file                                     usergen.model
+    0  Back
+```
+
+- **Context length** is how many previous characters the model looks at.
+  It is fixed when a model is created, so a change applies after Clear all
+  knowledge. For Generate, a lower value than the model's gives wilder names.
+- **Save rejected usernames** writes each garbage username skipped during
+  training, with the reason, to `rejected_<count>.txt`.
+- **Dry run** shows what training would learn without saving anything. While
+  it is on, the menu says so next to Training.
+- **Seed** makes Edit and Generate repeatable: the same seed, model and input
+  always give the same output.
 
 ## Speed
 
@@ -103,8 +145,10 @@ Letters from any script are allowed, and real names such as `FirstStrike`,
 
 ## Commands
 
-Everything the menu does is also a command, for scripts. Progress bars are
-drawn only when output goes to a terminal.
+Everything the menu does is also a command, for scripts. Commands take
+flags and ignore the menu's settings file, so scripts behave the same
+wherever they run. Progress bars are drawn only when output goes to a
+terminal.
 
 ```sh
 ./usergen train names.txt more.txt          # or - for stdin
@@ -117,7 +161,7 @@ drawn only when output goes to a terminal.
 
 | Flag | Command | Meaning |
 |------|---------|---------|
-| `-model` | all | model file (default `usergen.model`); also `usergen menu -model FILE` |
+| `-model` | all | model file (default `usergen.model`) |
 | `-order` | train | characters of context for a **new** model (default 3) |
 | `-show-rejected` | train | print each garbage username skipped and why |
 | `-dry-run` | train | report what would be learned without saving |

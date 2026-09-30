@@ -48,7 +48,7 @@ func TestMenuTrainThenEdit(t *testing.T) {
 		"0",
 	}, "\n") + "\n"
 	var out strings.Builder
-	if err := menu(strings.NewReader(input), &out, "model"); err != nil {
+	if err := menu(strings.NewReader(input), &out, settingsFile); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -81,7 +81,7 @@ func TestMenuTrainThenEdit(t *testing.T) {
 			t.Errorf("edited file contains input name %q", ed)
 		}
 	}
-	if _, err := os.Stat("model"); err != nil {
+	if _, err := os.Stat(defaultModel); err != nil {
 		t.Errorf("model not saved: %v", err)
 	}
 }
@@ -90,21 +90,21 @@ func TestMenuSurvivesErrorsAndEOF(t *testing.T) {
 	t.Chdir(t.TempDir())
 	var out strings.Builder
 	// A missing file is reported and the menu continues; input then ends.
-	if err := menu(strings.NewReader("1\nmissing.txt\n7\n"), &out, "model"); err != nil {
+	if err := menu(strings.NewReader("1\nmissing.txt\n7\n"), &out, settingsFile); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); !strings.Contains(got, "Error: stat missing.txt") || !strings.Contains(got, "Choose 1, 2, 3, 4 or 0.") {
+	if got := out.String(); !strings.Contains(got, "Error: stat missing.txt") || !strings.Contains(got, "Choose 1-6, or 0 to exit.") {
 		t.Errorf("unexpected output:\n%s", got)
 	}
 }
 
-func TestPlaceEditedNeverOverwrites(t *testing.T) {
+func TestPlaceNumberedNeverOverwrites(t *testing.T) {
 	dir := t.TempDir()
 	var got []string
 	for i := range 3 {
 		tmp := filepath.Join(dir, "tmp")
 		writeFile(t, tmp, strings.Repeat("x", i))
-		p, err := placeEdited(tmp, dir, 2)
+		p, err := placeNumbered(tmp, dir, "edited", 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -153,15 +153,15 @@ func TestMenuInfoAndClear(t *testing.T) {
 
 	input := strings.Join([]string{
 		"1", "names.txt", // train (loads the old model, saves the new one)
-		"3",       // info
-		"4", "no", // clear, refused
-		"4", "YES", // clear, confirmed
-		"3", // info: nothing left
+		"4",       // info
+		"6", "no", // clear, refused
+		"6", "YES", // clear, confirmed
+		"4", // info: nothing left
 		"2", // edit: nothing left
 		"0",
 	}, "\n") + "\n"
 	var out strings.Builder
-	if err := menu(strings.NewReader(input), &out, defaultModel); err != nil {
+	if err := menu(strings.NewReader(input), &out, settingsFile); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -200,5 +200,138 @@ func TestFileLabel(t *testing.T) {
 	writeFile(t, defaultModel, strings.Repeat("x", 2_500_000))
 	if got, want := fileLabel(defaultModel), "usergen.model (2.5 MB)"; got != want {
 		t.Errorf("fileLabel = %q, want %q", got, want)
+	}
+}
+
+// trainedDir changes to a temporary directory holding the example usernames
+// as names.txt.
+func trainedDir(t *testing.T) {
+	t.Helper()
+	t.Chdir(t.TempDir())
+	train, err := os.ReadFile(filepath.Join(repoRoot, "examples", "usernames.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, "names.txt", string(train))
+}
+
+func runMenu(t *testing.T, answers ...string) string {
+	t.Helper()
+	var out strings.Builder
+	if err := menu(strings.NewReader(strings.Join(answers, "\n")+"\n"), &out, settingsFile); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
+func TestMenuSettingsApply(t *testing.T) {
+	trainedDir(t)
+	writeFile(t, "mine.txt", "ShadowFox\nDarkWolf_7\nStormHawk99\n")
+	got := runMenu(t,
+		"5",             // settings
+		"4", "abc", "3", // edits per username: invalid, then 3
+		"6", "20", // shortest length 20 > longest 16: refused
+		"5", "7", // generate 7 usernames
+		"11", "42", // seed
+		"12", "other.model", // model file
+		"0",
+		"1", "names.txt", // train into other.model
+		"2", "mine.txt", // edit
+		"3", // generate
+		"0",
+	)
+	for _, want := range []string{
+		"Enter a whole number.",
+		"Not changed: shortest length 20 is above longest length 16.",
+		"   12  Model file                                     other.model",
+		"Saved 7 new usernames to generated_7.txt",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("menu output missing %q:\n%s", want, got)
+		}
+	}
+	if _, err := os.Stat("other.model"); err != nil {
+		t.Errorf("training ignored the model file setting: %v", err)
+	}
+	edited, _ := filepath.Glob("edited_*.txt")
+	if len(edited) != 1 {
+		t.Fatalf("edited files: %v", edited)
+	}
+	if n := len(readLines(t, edited[0])); n == 0 || n > 9 {
+		t.Errorf("%d edits for 3 names at 3 per name, want 1-9", n)
+	}
+	if n := len(readLines(t, "generated_7.txt")); n != 7 {
+		t.Errorf("generated_7.txt has %d names, want 7", n)
+	}
+
+	// Settings persist, and a new session uses them.
+	c, err := loadSettings(settingsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := defaultSettings()
+	want.EditsPerName, want.GenCount, want.Seed, want.ModelFile = 3, 7, 42, "other.model"
+	if c != want {
+		t.Errorf("saved settings = %+v, want %+v", c, want)
+	}
+	if got := runMenu(t, "4", "0"); !strings.Contains(got, "Model file   other.model") {
+		t.Errorf("new session did not use saved model file:\n%s", got)
+	}
+}
+
+func TestMenuDryRunAndRejected(t *testing.T) {
+	trainedDir(t)
+	writeFile(t, "messy.txt", "ShadowFox\nasdfghjkl\nuser_123\njohn@mail.com\n")
+	got := runMenu(t,
+		"5", "2", "3", "0", // turn on save rejected and dry run
+		"1", "messy.txt",
+		"4", // info: nothing learned
+		"0",
+	)
+	for _, want := range []string{
+		"1 - Training   (dry run is on: nothing will be saved)",
+		"Dry run: would learn 1 new usernames",
+		"Nothing was saved.",
+		"Saved 3 rejected usernames, with reasons, to rejected_3.txt",
+		"Nothing learned yet",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("menu output missing %q:\n%s", want, got)
+		}
+	}
+	if _, err := os.Stat(defaultModel); err == nil {
+		t.Error("dry run saved a model")
+	}
+	data, _ := os.ReadFile("rejected_3.txt")
+	if want := "asdfghjkl\tkeyboard or alphabet sequence\nuser_123\tplaceholder or auto-generated\njohn@mail.com\tdisallowed character\n"; string(data) != want {
+		t.Errorf("rejected_3.txt = %q, want %q", data, want)
+	}
+	if tmp, _ := filepath.Glob(".rejected-*"); len(tmp) != 0 {
+		t.Errorf("temporary files left behind: %v", tmp)
+	}
+}
+
+func TestLoadSettings(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if c, err := loadSettings("missing.json"); err != nil || c != defaultSettings() {
+		t.Errorf("missing file: %+v, %v; want defaults", c, err)
+	}
+	writeFile(t, "partial.json", `{"edits_per_username": 4}`)
+	if c, err := loadSettings("partial.json"); err != nil || c.EditsPerName != 4 || c.GenCount != defaultSettings().GenCount {
+		t.Errorf("partial file: %+v, %v", c, err)
+	}
+	for name, body := range map[string]string{
+		"garbage.json": "not json",
+		"invalid.json": `{"generate_min_length": 20, "generate_max_length": 5}`,
+	} {
+		writeFile(t, name, body)
+		if c, err := loadSettings(name); err == nil || c != defaultSettings() {
+			t.Errorf("%s: %+v, %v; want defaults and an error", name, c, err)
+		}
+	}
+	var out strings.Builder
+	writeFile(t, settingsFile, "not json")
+	if err := menu(strings.NewReader("0\n"), &out, settingsFile); err != nil || !strings.Contains(out.String(), "using default settings") {
+		t.Errorf("menu with bad settings: %v\n%s", err, out.String())
 	}
 }

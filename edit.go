@@ -5,9 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/anaassss/Project/edit"
@@ -102,7 +100,7 @@ func editFile(m *markov.Model, path string, opts edit.Options, seed uint64, dir 
 		if err := os.Chmod(tmp.Name(), 0o644); err != nil {
 			return err
 		}
-		out, err = placeEdited(tmp.Name(), dir, count)
+		out, err = placeNumbered(tmp.Name(), dir, "edited", count)
 		return err
 	}()
 	elapsed := p.end(err == nil)
@@ -117,23 +115,4 @@ func editSummary(path string, count int, elapsed time.Duration) string {
 		return "No edits found; train on more usernames like these first."
 	}
 	return fmt.Sprintf("Saved %s edited usernames to %s in %s", formatCount(count), path, formatDuration(elapsed))
-}
-
-// placeEdited moves tmp to edited_<count>.txt in dir. It never overwrites:
-// if that file exists it uses edited_<count>_2.txt, edited_<count>_3.txt, ...
-func placeEdited(tmp, dir string, count int) (string, error) {
-	for i := 1; ; i++ {
-		name := fmt.Sprintf("edited_%d.txt", count)
-		if i > 1 {
-			name = fmt.Sprintf("edited_%d_%d.txt", count, i)
-		}
-		path := filepath.Join(dir, name)
-		_, err := os.Lstat(path)
-		if errors.Is(err, fs.ErrNotExist) {
-			return path, os.Rename(tmp, path)
-		}
-		if err != nil {
-			return "", err
-		}
-	}
 }

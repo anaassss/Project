@@ -489,6 +489,10 @@ type GenerateOptions struct {
 
 	// AllowKnown permits returning names the model was trained on.
 	AllowKnown bool
+
+	// Progress, if non-nil, is called with the number of names found so far
+	// each time one is found.
+	Progress func(found int)
 }
 
 // Generate returns up to n distinct usernames that pass Check. It returns
@@ -532,6 +536,9 @@ func (m *Model) Generate(rng *rand.Rand, n int, opts GenerateOptions) ([]string,
 		}
 		produced[h] = struct{}{}
 		out = append(out, name)
+		if opts.Progress != nil {
+			opts.Progress(len(out))
+		}
 	}
 	return out, nil
 }
