@@ -141,12 +141,8 @@ func editsLabel(n int) string {
 // describeClaude prints what Claude's built-in knowledge contains.
 func describeClaude(w io.Writer) {
 	for i, m := range knowledge.Models() {
-		label := "Email-style"
-		if knowledge.Styles[i] == knowledge.Normal {
-			label = "Normal"
-		}
 		words, _ := m.Vocabulary()
-		fmt.Fprintf(w, "  %-12s %s usernames, %s words%s\n", label,
+		fmt.Fprintf(w, "  %-12s %s usernames, %s words%s\n", knowledge.Styles[i],
 			formatCount(int(m.Stats().Names)), formatCount(words), mostCommonList(m.TopWords(6)))
 	}
 }

@@ -35,7 +35,7 @@ import (
 const (
 	// vocabWords and vocabNumbers cap how many of the most common learned
 	// words and numbers are swapped in.
-	vocabWords   = 1000
+	vocabWords   = 3000
 	vocabNumbers = 100
 	// maxGrowth caps how many characters longer than the original an edit
 	// written by the model may be, so it can't chain fragments of learned
@@ -74,7 +74,27 @@ type Editor struct {
 type source struct {
 	m       *markov.Model
 	words   []string // learned words, lowercased, most common first
+	leads   []string // those that can start a name: dark, john
+	tails   []string // those that can come later: wolf, smith
 	numbers []string // learned numbers, most common first
+}
+
+func newSource(m *markov.Model) source {
+	src := source{m: m, numbers: m.TopNumbers(vocabNumbers)}
+	for _, w := range m.TopWords(vocabWords) {
+		if markov.IsAffix(w) {
+			continue // affixes frame names; they aren't swapped in
+		}
+		src.words = append(src.words, w)
+		lead, follow := m.Positions(w)
+		if lead {
+			src.leads = append(src.leads, w)
+		}
+		if follow {
+			src.tails = append(src.tails, w)
+		}
+	}
+	return src
 }
 
 // New prepares an Editor from the models that have learned something. It
@@ -83,7 +103,7 @@ func New(models []*markov.Model, opts Options) (*Editor, error) {
 	var sources []source
 	for _, m := range models {
 		if m != nil && m.Stats().Names > 0 {
-			sources = append(sources, source{m, m.TopWords(vocabWords), m.TopNumbers(vocabNumbers)})
+			sources = append(sources, newSource(m))
 		}
 	}
 	if len(sources) == 0 {
@@ -186,8 +206,13 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 	}
 
 	segs := markov.Split(name)
-	var swappable []int // words of 2+ letters, and numbers
+	// Swappable parts are numbers and words of 2+ letters other than affixes
+	// (xX, The, its), which are kept. The first such word is the lead: it is
+	// swapped for words that usually start names, later ones for words that
+	// usually come later, so john.smith doesn't become john.priya.
+	var swappable []int
 	styles := make([]caseStyle, len(segs))
+	lead := -1
 	parts := 0
 	for i, seg := range segs {
 		switch {
@@ -196,9 +221,12 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 			swappable = append(swappable, i)
 		case seg.Kind == markov.Word:
 			parts++
-			if utf8.RuneCountInString(seg.Text) >= 2 {
+			if utf8.RuneCountInString(seg.Text) >= 2 && !markov.IsAffix(seg.Text) {
 				swappable = append(swappable, i)
 				styles[i] = styleOf(seg.Text)
+				if lead < 0 {
+					lead = i
+				}
 			}
 		}
 	}
@@ -251,8 +279,13 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 		add(cand)
 	}
 	vocabFor := func(src source, i int) []string {
-		if segs[i].Kind == markov.Number {
+		switch {
+		case segs[i].Kind == markov.Number:
 			return src.numbers
+		case i == lead && len(src.leads) > 0:
+			return src.leads
+		case i != lead && len(src.tails) > 0:
+			return src.tails
 		}
 		return src.words
 	}

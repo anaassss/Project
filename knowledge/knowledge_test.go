@@ -12,8 +12,9 @@ import (
 
 func TestListsHaveNoDuplicates(t *testing.T) {
 	for name, list := range map[string][]string{
-		"firstNames": firstNames, "lastNames": lastNames, "adjectives": adjectives,
-		"nouns": nouns, "hobbies": hobbies, "namePrefixes": namePrefixes,
+		"firstNames": firstNames, "lastNames": lastNames, "gamingAdjectives": gamingAdjectives,
+		"gamingNouns": gamingNouns, "gamingTitles": gamingTitles, "channelSuffixes": channelSuffixes,
+		"socialWords": socialWords, "hobbies": hobbies, "socialPrefixes": socialPrefixes,
 	} {
 		seen := map[string]bool{}
 		for _, w := range list {
@@ -28,7 +29,7 @@ func TestListsHaveNoDuplicates(t *testing.T) {
 func TestUsernamesPassCheck(t *testing.T) {
 	r := rand.New(rand.NewPCG(1, 1))
 	for _, s := range Styles {
-		for range 20000 {
+		for range 30000 {
 			if name := Username(r, s); markov.Check(name) != nil {
 				t.Fatalf("%s username %q fails Check: %v", s, name, markov.Check(name))
 			}
@@ -36,41 +37,59 @@ func TestUsernamesPassCheck(t *testing.T) {
 	}
 }
 
+// TestPatternsRarelyFail makes sure no pattern mostly builds garbage that
+// Username would silently retry.
+func TestPatternsRarelyFail(t *testing.T) {
+	r := rand.New(rand.NewPCG(4, 4))
+	for _, s := range Styles {
+		for i, p := range patternsFor(s) {
+			failed := 0
+			for range 2000 {
+				if markov.Check(p.build(r)) != nil {
+					failed++
+				}
+			}
+			if failed > 100 {
+				t.Errorf("%s pattern %d fails the garbage filter %d times in 2000", s, i, failed)
+			}
+		}
+	}
+}
+
 func TestEmailStyleIsBuiltFromNames(t *testing.T) {
 	r := rand.New(rand.NewPCG(2, 2))
-	withName := 0
 	for range 1000 {
 		name := Username(r, Email)
 		if name != strings.ToLower(name) {
 			t.Errorf("email-style %q is not lowercase", name)
 		}
-		if slices.ContainsFunc(lastNames, func(l string) bool { return strings.Contains(name, l) }) ||
-			slices.ContainsFunc(firstNames, func(f string) bool { return strings.Contains(name, f) }) {
-			withName++
+		if !slices.ContainsFunc(firstNames, func(f string) bool { return strings.Contains(name, f) }) &&
+			!slices.ContainsFunc(lastNames, func(l string) bool { return strings.Contains(name, l) }) {
+			t.Errorf("email-style %q contains no name", name)
 		}
-	}
-	if withName < 990 {
-		t.Errorf("only %d of 1000 email-style usernames contain a name", withName)
 	}
 }
 
-func TestNormalStyleVaries(t *testing.T) {
+func TestStylesDiffer(t *testing.T) {
 	r := rand.New(rand.NewPCG(3, 3))
-	var camel, lower, digits int
-	for range 1000 {
-		name := Username(r, Normal)
-		switch {
-		case name == strings.ToLower(name):
-			lower++
-		default:
-			camel++
+	count := func(s Style, f func(string) bool) int {
+		n := 0
+		for range 1000 {
+			if f(Username(r, s)) {
+				n++
+			}
 		}
-		if strings.ContainsAny(name, "0123456789") {
-			digits++
-		}
+		return n
 	}
-	if camel < 300 || lower < 300 || digits < 150 {
-		t.Errorf("normal style too uniform: %d CamelCase, %d lowercase, %d with digits", camel, lower, digits)
+	hasUpper := func(n string) bool { return n != strings.ToLower(n) }
+	if n := count(Gaming, hasUpper); n < 700 {
+		t.Errorf("only %d of 1000 gaming names use capitals", n)
+	}
+	if n := count(Social, hasUpper); n > 50 {
+		t.Errorf("%d of 1000 social names use capitals", n)
+	}
+	if n := count(Gaming, func(n string) bool { return strings.ContainsAny(n, "0123456789") }); n < 100 {
+		t.Errorf("only %d of 1000 gaming names have numbers", n)
 	}
 }
 
@@ -83,19 +102,8 @@ func TestWrite(t *testing.T) {
 	if a.String() != b.String() {
 		t.Error("Write is not deterministic for a seed")
 	}
-	if n := strings.Count(a.String(), "\n"); n != 1000 {
-		t.Errorf("Write wrote %d lines, want 1000", n)
-	}
-}
-
-func TestParseStyle(t *testing.T) {
-	for in, want := range map[string][]Style{"email": {Email}, "Normal": {Normal}, "both": Styles} {
-		if got, err := ParseStyle(in); err != nil || !slices.Equal(got, want) {
-			t.Errorf("ParseStyle(%q) = %v, %v", in, got, err)
-		}
-	}
-	if _, err := ParseStyle("gamer"); err == nil {
-		t.Error("ParseStyle accepted an unknown style")
+	if n := strings.Count(a.String(), "\n"); n != 500*len(Styles) {
+		t.Errorf("Write wrote %d lines, want %d", n, 500*len(Styles))
 	}
 }
 
@@ -107,17 +115,18 @@ func TestModels(t *testing.T) {
 	if again := Models(); again[0] != ms[0] {
 		t.Error("Models rebuilt its models")
 	}
-	email, normal := ms[0], ms[1]
+	email, gaming, social := ms[0], ms[1], ms[2]
 	for _, c := range []struct {
 		m    *markov.Model
 		word string
 		want bool
 	}{
-		{email, "smith", true}, {email, "garcia", true}, {email, "panda", false},
-		{normal, "panda", true}, {normal, "silent", true}, {normal, "garcia", false},
+		{email, "smith", true}, {email, "okafor", true}, {email, "yamamoto", true}, {email, "panda", false},
+		{gaming, "panda", true}, {gaming, "valkyrie", true}, {gaming, "garcia", false},
+		{social, "lavender", true}, {social, "bakes", true}, {social, "valkyrie", false},
 	} {
 		if got := c.m.KnowsWord(c.word); got != c.want {
-			t.Errorf("model knows %q = %v, want %v", c.word, got, c.want)
+			t.Errorf("%s model knows %q = %v, want %v", Styles[slices.Index(ms, c.m)], c.word, got, c.want)
 		}
 	}
 }

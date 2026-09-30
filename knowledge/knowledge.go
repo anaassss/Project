@@ -1,12 +1,15 @@
 // Package knowledge is usergen's built-in knowledge of how real usernames
 // are made. Rather than a list of anyone's actual accounts, it generates
-// usernames from the patterns people use, combining common first and last
-// names and everyday words the way real accounts do:
+// usernames from the patterns people use, combining about 1,250 first names
+// and 1,200 last names from many countries and several hundred words the way
+// real accounts do:
 //
-//   - Email-style: john.smith, jsmith, smithj, j.smith, john.smith92,
-//     jsmith1987, john.m.smith
-//   - Normal (social and gaming): SilentWolf, itsmike, sarahbakes, mike_92,
-//     TheNightOwl, xXDragonSlayerXx, NovaTV
+//   - Email-style: john.smith, jsmith, smithj, j.smith, john.m.smith,
+//     johnmsmith, maria.garcia-lopez, john.smith92, jsmith1987
+//   - Gaming: SilentWolf, xXDragonSlayerXx, TheNightOwl, SirWaffle,
+//     Vortex.exe, dark_knight, NovaTTV, ShadowHunter99
+//   - Social: itsmike, sarahbakes, mike_92, lunar.dreams, _lily_, x.luna.x,
+//     mike.and.jess, sarah-dev, peach.jpg
 //
 // Models returns this knowledge as ready-made models, one per style, which
 // usergen uses as Claude's knowledge alongside whatever the user trains.
@@ -19,7 +22,6 @@ import (
 	"io"
 	"math/rand/v2"
 	"strconv"
-	"strings"
 	"sync"
 	"unicode"
 	"unicode/utf8"
@@ -32,34 +34,25 @@ type Style int
 
 const (
 	Email  Style = iota // name-based, like email addresses: john.smith92
-	Normal              // social media and gaming handles: SilentWolf
+	Gaming              // gamer tags: SilentWolf, xXDragonSlayerXx
+	Social              // social media handles: itsmike, lunar.dreams
 )
 
 // Styles lists every style.
-var Styles = []Style{Email, Normal}
+var Styles = []Style{Email, Gaming, Social}
 
 func (s Style) String() string {
-	if s == Email {
-		return "email"
+	switch s {
+	case Email:
+		return "Email-style"
+	case Gaming:
+		return "Gaming"
 	}
-	return "normal"
-}
-
-// ParseStyle reads a style name: "email", "normal" or "both".
-func ParseStyle(name string) ([]Style, error) {
-	switch strings.ToLower(name) {
-	case "email":
-		return []Style{Email}, nil
-	case "normal":
-		return []Style{Normal}, nil
-	case "both":
-		return Styles, nil
-	}
-	return nil, fmt.Errorf("unknown style %q: use email, normal or both", name)
+	return "Social"
 }
 
 // pattern builds one username. Patterns are weighted by roughly how common
-// each shape is among real accounts.
+// each shape is among real accounts of the style.
 type pattern struct {
 	weight int
 	build  func(r *rand.Rand) string
@@ -77,18 +70,25 @@ func initial(s string) string {
 	return s[:size]
 }
 
+// Shorthands for the lists.
+func first(r *rand.Rand) string { return pick(r, firstNames) }
+func last(r *rand.Rand) string  { return pick(r, lastNames) }
+func adj(r *rand.Rand) string   { return pick(r, gamingAdjectives) }
+func noun(r *rand.Rand) string  { return pick(r, gamingNouns) }
+func word(r *rand.Rand) string  { return pick(r, socialWords) }
+
 // digits returns the numbers people add to usernames: mostly birth years,
 // in full or short, else small or favourite numbers.
 func digits(r *rand.Rand) string {
 	switch x := r.IntN(100); {
-	case x < 40:
-		return fmt.Sprintf("%02d", (70+r.IntN(40))%100) // 70..99, 00..09
-	case x < 70:
-		return strconv.Itoa(1965 + r.IntN(46)) // 1965..2010
-	case x < 90:
+	case x < 38:
+		return fmt.Sprintf("%02d", (70+r.IntN(43))%100) // 70..99, 00..12
+	case x < 66:
+		return strconv.Itoa(1965 + r.IntN(48)) // 1965..2012
+	case x < 88:
 		return strconv.Itoa(1 + r.IntN(99))
 	default:
-		return pick(r, []string{"123", "007", "01", "11", "22", "777"})
+		return pick(r, []string{"123", "007", "01", "02", "11", "13", "21", "22", "23", "77", "99", "101", "321", "777", "2000", "2020", "2024"})
 	}
 }
 
@@ -104,61 +104,113 @@ func separator(r *rand.Rand) string {
 }
 
 var emailPatterns = []pattern{
-	{22, func(r *rand.Rand) string { return pick(r, firstNames) + "." + pick(r, lastNames) }},
-	{10, func(r *rand.Rand) string { return pick(r, firstNames) + pick(r, lastNames) }},
-	{5, func(r *rand.Rand) string { return pick(r, firstNames) + "_" + pick(r, lastNames) }},
-	{12, func(r *rand.Rand) string { return initial(pick(r, firstNames)) + pick(r, lastNames) }},
-	{5, func(r *rand.Rand) string { return initial(pick(r, firstNames)) + "." + pick(r, lastNames) }},
-	{4, func(r *rand.Rand) string { return pick(r, firstNames) + initial(pick(r, lastNames)) }},
-	{2, func(r *rand.Rand) string { return pick(r, firstNames) + "." + initial(pick(r, lastNames)) }},
-	{3, func(r *rand.Rand) string { return pick(r, lastNames) + "." + pick(r, firstNames) }},
-	{3, func(r *rand.Rand) string { return pick(r, lastNames) + initial(pick(r, firstNames)) }},
-	{2, func(r *rand.Rand) string {
-		return pick(r, firstNames) + "." + initial(pick(r, firstNames)) + "." + pick(r, lastNames)
-	}},
-	{1, func(r *rand.Rand) string { return pick(r, firstNames) + "-" + pick(r, lastNames) }},
-	{12, func(r *rand.Rand) string { return pick(r, firstNames) + digits(r) }},
-	{10, func(r *rand.Rand) string { return pick(r, firstNames) + pick(r, lastNames) + digits(r) }},
-	{6, func(r *rand.Rand) string { return pick(r, firstNames) + "." + pick(r, lastNames) + digits(r) }},
-	{5, func(r *rand.Rand) string { return initial(pick(r, firstNames)) + pick(r, lastNames) + digits(r) }},
-	{2, func(r *rand.Rand) string { return pick(r, firstNames) + "_" + pick(r, lastNames) + digits(r) }},
+	{22, func(r *rand.Rand) string { return first(r) + "." + last(r) }},
+	{10, func(r *rand.Rand) string { return first(r) + last(r) }},
+	{5, func(r *rand.Rand) string { return first(r) + "_" + last(r) }},
+	{12, func(r *rand.Rand) string { return initial(first(r)) + last(r) }},
+	{5, func(r *rand.Rand) string { return initial(first(r)) + "." + last(r) }},
+	{4, func(r *rand.Rand) string { return first(r) + initial(last(r)) }},
+	{2, func(r *rand.Rand) string { return first(r) + "." + initial(last(r)) }},
+	{3, func(r *rand.Rand) string { return last(r) + "." + first(r) }},
+	{3, func(r *rand.Rand) string { return last(r) + initial(first(r)) }},
+	{2, func(r *rand.Rand) string { return last(r) + first(r) }},
+	{2, func(r *rand.Rand) string { return first(r) + "." + initial(first(r)) + "." + last(r) }},
+	{2, func(r *rand.Rand) string { return first(r) + initial(first(r)) + last(r) }},
+	{1, func(r *rand.Rand) string { return initial(first(r)) + "." + initial(first(r)) + "." + last(r) }},
+	{1, func(r *rand.Rand) string { return first(r) + "-" + last(r) }},
+	{1, func(r *rand.Rand) string { return first(r) + "." + last(r) + "-" + last(r) }},
+	{12, func(r *rand.Rand) string { return first(r) + digits(r) }},
+	{10, func(r *rand.Rand) string { return first(r) + last(r) + digits(r) }},
+	{6, func(r *rand.Rand) string { return first(r) + "." + last(r) + digits(r) }},
+	{5, func(r *rand.Rand) string { return initial(first(r)) + last(r) + digits(r) }},
+	{2, func(r *rand.Rand) string { return first(r) + "_" + last(r) + digits(r) }},
+	{2, func(r *rand.Rand) string { return first(r) + initial(last(r)) + digits(r) }},
 }
 
-var normalPatterns = []pattern{
-	{14, func(r *rand.Rand) string { return title(pick(r, adjectives)) + title(pick(r, nouns)) }},
-	{8, func(r *rand.Rand) string { return title(pick(r, nouns)) + title(pick(r, nouns)) }},
-	{5, func(r *rand.Rand) string { return pick(r, adjectives) + pick(r, nouns) }},
-	{4, func(r *rand.Rand) string { return pick(r, adjectives) + pick(r, []string{"_", "."}) + pick(r, nouns) }},
-	{12, func(r *rand.Rand) string { return pick(r, firstNames) + separator(r) + digits(r) }},
-	{8, func(r *rand.Rand) string { return pick(r, namePrefixes) + pick(r, firstNames) }},
-	{8, func(r *rand.Rand) string { return pick(r, firstNames) + separator(r) + pick(r, hobbies) }},
-	{4, func(r *rand.Rand) string { return title(pick(r, firstNames)) + title(pick(r, nouns)) }},
-	{4, func(r *rand.Rand) string {
-		if r.IntN(2) == 0 {
-			return "The" + title(pick(r, nouns))
-		}
-		return "The" + title(pick(r, adjectives)) + title(pick(r, nouns))
-	}},
-	{3, func(r *rand.Rand) string { return "xX" + title(pick(r, adjectives)) + title(pick(r, nouns)) + "Xx" }},
+var gamingPatterns = []pattern{
+	{14, func(r *rand.Rand) string { return title(adj(r)) + title(noun(r)) }},
+	{8, func(r *rand.Rand) string { return title(noun(r)) + title(noun(r)) }},
 	{10, func(r *rand.Rand) string {
 		if r.IntN(2) == 0 {
-			return title(pick(r, nouns)) + title(pick(r, nouns)) + separator(r) + digits(r)
+			return title(noun(r)) + title(noun(r)) + separator(r) + digits(r)
 		}
-		return title(pick(r, adjectives)) + title(pick(r, nouns)) + digits(r)
+		return title(adj(r)) + title(noun(r)) + digits(r)
 	}},
-	{3, func(r *rand.Rand) string { return title(pick(r, nouns)) + pick(r, channelSuffixes) }},
-	{3, func(r *rand.Rand) string { return pick(r, adjectives) + pick(r, firstNames) }},
-	{3, func(r *rand.Rand) string { return pick(r, nouns) + "." + pick(r, nouns) }},
+	{5, func(r *rand.Rand) string {
+		if r.IntN(3) == 0 {
+			return "xX" + title(noun(r)) + "Xx"
+		}
+		return "xX" + title(adj(r)) + title(noun(r)) + "Xx"
+	}},
+	{5, func(r *rand.Rand) string {
+		if r.IntN(2) == 0 {
+			return "The" + title(noun(r))
+		}
+		return "The" + title(adj(r)) + title(noun(r))
+	}},
+	{4, func(r *rand.Rand) string { return title(noun(r)) + pick(r, channelSuffixes) }},
+	{5, func(r *rand.Rand) string { return title(pick(r, gamingTitles)) + title(noun(r)) }},
+	{2, func(r *rand.Rand) string { return title(pick(r, gamingTitles)) + "_" + title(adj(r)) }},
+	{4, func(r *rand.Rand) string { return adj(r) + "_" + noun(r) }},
+	{4, func(r *rand.Rand) string { return adj(r) + noun(r) }},
+	{3, func(r *rand.Rand) string { return adj(r) + "_" + noun(r) + digits(r) }},
+	{2, func(r *rand.Rand) string { return title(noun(r)) + ".exe" }},
+	{2, func(r *rand.Rand) string { return "ii" + title(noun(r)) }},
+	{2, func(r *rand.Rand) string { return "NotA" + title(noun(r)) }},
+	{2, func(r *rand.Rand) string { return noun(r) + "." + noun(r) }},
 	// Leetspeak ("Fr0zenWolf") is left out: a model can't tell a digit
 	// standing in for a letter from a number, so it would learn fragments
 	// like "fr" and "zen" as words.
 }
 
+var socialPatterns = []pattern{
+	{10, func(r *rand.Rand) string { return pick(r, socialPrefixes) + first(r) }},
+	{10, func(r *rand.Rand) string { return first(r) + separator(r) + pick(r, hobbies) }},
+	{10, func(r *rand.Rand) string { return first(r) + separator(r) + digits(r) }},
+	{8, func(r *rand.Rand) string { return word(r) + pick(r, []string{".", "_"}) + word(r) }},
+	{5, func(r *rand.Rand) string { return word(r) + word(r) }},
+	{6, func(r *rand.Rand) string {
+		switch n := first(r); r.IntN(4) {
+		case 0:
+			return "_" + n + "_"
+		case 1:
+			return "x." + n + ".x"
+		case 2:
+			return n + ".x"
+		default:
+			return n + ".xo"
+		}
+	}},
+	{3, func(r *rand.Rand) string {
+		return pick(r, []string{"_", "x."}) + word(r) + pick(r, []string{"_", ".x"})
+	}},
+	{5, func(r *rand.Rand) string { return word(r) + first(r) }},
+	{5, func(r *rand.Rand) string { return first(r) + pick(r, []string{"", ".", "_"}) + word(r) }},
+	{3, func(r *rand.Rand) string { return first(r) + ".and." + first(r) }},
+	{3, func(r *rand.Rand) string {
+		return word(r) + pick(r, []string{".jpg", "vibes", ".vibes", "_vibes", ".png"})
+	}},
+	{4, func(r *rand.Rand) string { return first(r) + initial(last(r)) + digits(r) }},
+	{4, func(r *rand.Rand) string {
+		switch n := first(r); r.IntN(3) {
+		case 0:
+			return n + "-dev"
+		case 1:
+			return "dev." + n
+		default:
+			return n + "-" + pick(r, hobbies)
+		}
+	}},
+}
+
 func patternsFor(s Style) []pattern {
-	if s == Email {
+	switch s {
+	case Email:
 		return emailPatterns
+	case Gaming:
+		return gamingPatterns
 	}
-	return normalPatterns
+	return socialPatterns
 }
 
 // Username returns one username in the given style. It always passes

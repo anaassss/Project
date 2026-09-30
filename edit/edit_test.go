@@ -206,7 +206,7 @@ func TestEditRespectsLengthBounds(t *testing.T) {
 	}{
 		{"ShadowFox", 6, 9},
 		{"DarkWolf_7", 11, 14},
-		{"StormHawk99", 3, 8},
+		{"StormHawk99", 3, 9},
 		{"Shadow_Fox", 13, 20}, // longer than the name itself
 	} {
 		e := editor(t, Options{Max: 30, MinLen: c.min, MaxLen: c.max})
@@ -295,12 +295,38 @@ func TestEditEverything(t *testing.T) {
 		}
 		seen[key] = true
 	}
-	// Every learned word swapped into each part is among the edits.
-	for _, w := range e.sources[0].words {
-		for _, cand := range []string{"Shadow" + strings.ToUpper(w[:1]) + w[1:], strings.ToUpper(w[:1]) + w[1:] + "Fox"} {
-			if !seen[strings.ToLower(cand)] && markov.Check(cand) == nil && !e.knows(cand) && !strings.EqualFold(cand, "ShadowFox") {
-				t.Errorf("Max 0 missed the swap %q", cand)
-			}
+	// Every word that usually starts a name is swapped into the first part,
+	// and every word that usually comes later into the second.
+	src := e.sources[0]
+	var want []string
+	for _, w := range src.leads {
+		want = append(want, strings.ToUpper(w[:1])+w[1:]+"Fox")
+	}
+	for _, w := range src.tails {
+		want = append(want, "Shadow"+strings.ToUpper(w[:1])+w[1:])
+	}
+	for _, cand := range want {
+		if !seen[strings.ToLower(cand)] && markov.Check(cand) == nil && !e.knows(cand) && !strings.EqualFold(cand, "ShadowFox") {
+			t.Errorf("Max 0 missed the swap %q", cand)
+		}
+	}
+	for _, junk := range []string{"FoxFox", "ShadowShadow", "WolfFox"} {
+		if seen[strings.ToLower(junk)] {
+			t.Errorf("Max 0 swapped a word into a position it never takes: %q", junk)
+		}
+	}
+}
+
+func TestEditKeepsAffixes(t *testing.T) {
+	e := editor(t, Options{Max: 0})
+	for _, ed := range e.Edit(rng(), "xXSniperXx", nil) {
+		if !strings.HasPrefix(ed, "xX") {
+			t.Errorf("Edit(xXSniperXx) lost its wrapper: %q", ed)
+		}
+	}
+	for _, ed := range e.Edit(rng(), "ShadowFox", nil) {
+		if slices.ContainsFunc(markov.Split(ed), func(s markov.Segment) bool { return markov.IsAffix(s.Text) }) {
+			t.Errorf("Edit(ShadowFox) swapped in an affix: %q", ed)
 		}
 	}
 }

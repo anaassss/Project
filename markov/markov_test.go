@@ -368,3 +368,82 @@ func TestWordLike(t *testing.T) {
 		t.Error("a model with few words judged a word")
 	}
 }
+
+func TestWordPositions(t *testing.T) {
+	m, _ := New(3)
+	for _, name := range []string{"DarkWolf", "DarkFox", "SilentWolf", "xXDarkRavenXx", "TheDarkOwl", "IronWolf"} {
+		m.Learn(name)
+	}
+	for word, want := range map[string]float64{"dark": 1, "wolf": 0, "raven": 0, "silent": 1} {
+		if got, ok := m.LeadShare(word); !ok || got != want {
+			t.Errorf("LeadShare(%q) = %v, %v; want %v", word, got, ok, want)
+		}
+	}
+	if _, ok := m.LeadShare("xx"); !ok {
+		t.Error("affix xx wasn't learned as a word")
+	}
+	if got, _ := m.LeadShare("xx"); got != 0 {
+		t.Errorf("affix xx counted as a lead word: %v", got)
+	}
+
+	path := filepath.Join(t.TempDir(), "model")
+	m.Save(path)
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := loaded.LeadShare("dark"); got != 1 {
+		t.Errorf("positions lost on save and load: %v", got)
+	}
+}
+
+func TestKnowsWordRules(t *testing.T) {
+	m, _ := New(3)
+	for _, name := range []string{"john.smith", "ming.lee", "ha.nguyen", "sarah.bakes", "mike.and.jess", "arlo.hans"} {
+		m.Learn(name)
+	}
+	for word, want := range map[string]bool{
+		"jsmith":       true,  // initial + a word that comes later
+		"aming":        false, // initial + a word that starts names
+		"harlohans":    false, // initial + run-together words
+		"sarahbakes":   true,  // run-together words in their usual order
+		"johnsmith":    true,
+		"sarahming":    false, // a second piece that only starts names
+		"sarahbakesha": false, // "ha" is too short to glue on
+		"mikeand":      false, // affixes aren't pieces
+		"and":          true,  // but are words
+	} {
+		if got := m.KnowsWord(word); got != want {
+			t.Errorf("KnowsWord(%q) = %v, want %v", word, got, want)
+		}
+	}
+}
+
+func TestModelWithoutPositionsStaysWithout(t *testing.T) {
+	old := trained(t, 3)
+	old.leads = map[string]uint32{} // as saved before positions existed
+	path := filepath.Join(t.TempDir(), "model")
+	if err := old.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.LeadShare("shadow"); ok {
+		t.Fatal("a model saved without positions reports them")
+	}
+	// Learning more doesn't give it partial positions, before or after saving.
+	m.Learn("ShadowPanda")
+	if _, ok := m.LeadShare("shadow"); ok {
+		t.Error("partial positions after learning")
+	}
+	m.Save(path)
+	m, _ = Load(path)
+	if _, ok := m.LeadShare("panda"); ok {
+		t.Error("partial positions after saving and loading")
+	}
+	if lead, follow := m.Positions("shadow"); !lead || !follow {
+		t.Error("words without positions can't go everywhere")
+	}
+}

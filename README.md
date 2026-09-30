@@ -65,15 +65,24 @@ result.
 ## Claude knowledge
 
 Rather than a list of anyone's real accounts, it is the patterns real
-usernames follow, combined with about 200 common first names and 200 last
-names from many countries and a few hundred everyday words. It is learned
-from 100,000 usernames of each style, built in a fraction of a second when
-first needed:
+usernames follow, combined with:
+
+- about 1,250 first names and nicknames and 1,200 last names from the US and
+  UK, Latin America, Europe, the Nordics, Eastern Europe, the Arab world,
+  Turkey, Iran, South Asia, East and Southeast Asia, and Africa;
+- 180 adjectives and 350 nouns gamers use (creatures, classes, weapons,
+  space, weather, gems, food), and titles like Sir, Lord and Captain;
+- 245 words social handles are made of, 60 hobbies and trades, and the
+  prefixes people put before their names.
+
+It is learned from 100,000 usernames of each style, built in about half a
+second when first needed:
 
 | Style | Patterns | Examples |
 |-------|----------|----------|
-| Email | first.last, firstlast, flast, f.last, firstl, last.first, first.m.last, and those with birth years or numbers | `john.smith`, `jsmith`, `neha.walker72`, `lnguyen1982`, `gpark007` |
-| Normal | AdjectiveNoun, NounNoun, name + number, its/real/the + name, name + hobby, xX…Xx, TheNoun, channel names | `SilentWolf`, `itsmike`, `sarahbakes`, `mike_92`, `xXShadowXx`, `HyperHD` |
+| Email | first.last, firstlast, flast, f.last, firstl, last.first, lastfirst, first.m.last, firstmlast, j.m.last, double surnames, and those with birth years or numbers | `john.smith`, `jsmith`, `neha.walker72`, `lnguyen1982`, `maria.garcia-lopez` |
+| Gaming | AdjectiveNoun, NounNoun, with numbers, xX…Xx, TheNoun, Sir/Lord/Captain + Noun, channel names, adj_noun, Noun.exe, iiNoun, NotANoun | `SilentWolf`, `xXShadowXx`, `SirWaffle`, `Vortex.exe`, `NovaTTV`, `dark_knight` |
+| Social | its/real/the + name, name + hobby, name + number, word.word, _name_, x.name.x, name.xo, name.and.name, word.jpg, name-dev | `itsmike`, `sarahbakes`, `lunar.dreams`, `_lily_`, `mike.and.jess`, `peach.jpg` |
 
 You don't choose a style: each username is edited with whichever knowledge
 knows its words best, so `john.smith` gets email-style edits and
@@ -85,8 +94,9 @@ the same terms.
 Own knowledge
   Nothing learned yet. Choose 1 - Training to teach it.
 Claude knowledge (built in)
-  Email-style  78,301 usernames, 401 words; most common: carter, taylor, morgan, thomas, gordon, becker
-  Normal       71,200 usernames, 505 words; most common: xx, the, pixel, pirate, orbit, rain
+  Email-style  96,275 usernames, 2,381 words; most common: kelly, lucas, santiago, lorenzo, young, quinn
+  Gaming       74,883 usernames, 552 words; most common: xx, the, queen, chief, captain, lord
+  Social       83,274 usernames, 1,553 words; most common: and, dev, xo, vibes, png, garden
 ```
 
 ## Settings
@@ -139,7 +149,7 @@ Measured on a 4-core machine; more cores are faster.
 |------|-------|------|
 | Training | 2,000,000 lines | 1.5 s |
 | Edit, own knowledge | 1,000,000 usernames → 6.0M edits | 6.0 s |
-| Edit, Claude knowledge | 1,000,000 usernames → 4.9M edits | 5.5 s |
+| Edit, Claude knowledge | 1,000,000 usernames → 5.4M edits | 6.3 s |
 | Edit, both | 1,000,000 usernames → 6.1M edits | 7.1 s |
 
 Training checks and deduplicates names in file order, then counts patterns on
@@ -170,7 +180,12 @@ edit.
 
 Words are learned only from usernames that show where words start and end
 (`ShadowWolf`, `shadow_wolf`), and letters split by a leetspeak digit
-(`Fr0zen`) aren't taken for words.
+(`Fr0zen`) aren't taken for words. The model also learns where each word
+goes: whether it starts names (`dark`, `john`) or comes later (`wolf`,
+`smith`). Swaps put words only where they belong, so `john.smith` becomes
+`john.washington` or `samir.smith`, never `john.priya` or `WolfFox`.
+Wrappers like `xX…Xx`, `The` and `its` stay in place and are never swapped
+in.
 
 The saved file has one username per line with no duplicates. It leaves out
 the usernames you gave it and names any knowledge in use learned from. It is never
@@ -228,11 +243,15 @@ terminal.
 ## Own knowledge file
 
 `usergen.model` is binary so millions of usernames save and load quickly. It
-holds the character patterns, the learned words and numbers, and a 64-bit
-fingerprint of every learned name (for skipping duplicates), not the names
-themselves. Saves are atomic, so an interrupted run never corrupts it. Models
-from earlier versions (`usergen.json`) are converted automatically when
-loaded, dropping any names the garbage filter rejects.
+holds the character patterns, the learned words (with where they go in names)
+and numbers, and a 64-bit fingerprint of every learned name (for skipping
+duplicates), not the names themselves. Saves are atomic, so an interrupted
+run never corrupts it.
+
+Models from earlier versions still load. A `usergen.json` model is converted,
+dropping any names the garbage filter rejects. A model saved before word
+positions were recorded works without them until it's retrained: choose
+6 - Clear own knowledge and train again to get position-aware swaps.
 
 ## Tests
 

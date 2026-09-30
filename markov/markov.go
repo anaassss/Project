@@ -42,6 +42,12 @@ type Model struct {
 	tally
 	seen *hashSet // FoldHash of every learned name
 
+	// positionless marks models loaded from a file without word positions.
+	// They stay that way even as they learn more, because positions counted
+	// only for newer names would make every older word look like it never
+	// starts a name.
+	positionless bool
+
 	tableMu sync.Mutex
 	table   atomic.Pointer[tables] // sampling tables built from grams; nil when stale
 }
@@ -54,6 +60,7 @@ type tally struct {
 	// the next character's.
 	grams   map[string]uint32
 	words   map[string]uint32 // lowercased words of 2+ letters
+	leads   map[string]uint32 // how often each word was a name's first word
 	numbers map[string]uint32 // digit runs
 	stats   Stats
 }
@@ -82,6 +89,7 @@ func newTally() tally {
 	return tally{
 		grams:   make(map[string]uint32),
 		words:   make(map[string]uint32),
+		leads:   make(map[string]uint32),
 		numbers: make(map[string]uint32),
 	}
 }
@@ -229,10 +237,18 @@ func (t *tally) add(order int, name string, offs []int) []int {
 			wordCount++
 		}
 	}
+	lead := true // the next content word is the name's first
 	for i, seg := range segs {
 		switch {
 		case seg.Kind == Word && wordCount >= 2 && utf8.RuneCountInString(seg.Text) >= 2 && !leetNeighbour(segs, i):
-			t.words[strings.ToLower(seg.Text)]++
+			w := strings.ToLower(seg.Text)
+			t.words[w]++
+			if !IsAffix(w) {
+				if lead {
+					t.leads[w]++
+				}
+				lead = false
+			}
 		case seg.Kind == Number:
 			t.numbers[seg.Text]++
 		}
@@ -273,6 +289,7 @@ func leetNeighbour(segs []Segment, i int) bool {
 func (t *tally) merge(o *tally) {
 	mergeCounts(&t.grams, o.grams)
 	mergeCounts(&t.words, o.words)
+	mergeCounts(&t.leads, o.leads)
 	mergeCounts(&t.numbers, o.numbers)
 	if o.stats.Names == 0 {
 		return
@@ -300,30 +317,84 @@ const (
 	minWordsToJudge = 50
 	// maxWordBytes bounds the learned words WordLike tries when splitting.
 	maxWordBytes = 24
+	// minPieceBytes is the shortest learned word counted as part of a
+	// run-together word, so two-letter names ("ha") can't glue junk on.
+	minPieceBytes = 3
 )
 
+// affixes are the wrappers and connectors usernames are built with rather
+// than words that carry meaning: xX...Xx, its/the/real + name, name.and.name,
+// peach.jpg, NovaTV.
+var affixes = map[string]bool{
+	"xx": true, "the": true, "its": true, "im": true, "iam": true, "real": true,
+	"just": true, "hey": true, "not": true, "nota": true, "ii": true, "and": true,
+	"xo": true, "jpg": true, "png": true, "exe": true, "tv": true, "yt": true,
+	"ttv": true, "hd": true, "gg": true, "mr": true, "ms": true, "mrs": true,
+	"lil": true, "official": true,
+}
+
+// IsAffix reports whether word (in any case) is a username affix such as
+// "xX", "its" or "jpg", which frames a name rather than carrying meaning.
+func IsAffix(word string) bool { return affixes[strings.ToLower(word)] }
+
+// LeadShare reports the share of a learned word's appearances in which it
+// was a name's first word: near 1 for words like "dark" and "john", near 0
+// for "wolf" and "smith". It reports false for unknown words, and for any
+// word in models saved before positions were recorded.
+func (m *Model) LeadShare(word string) (float64, bool) {
+	w := strings.ToLower(word)
+	n := m.words[w]
+	if n == 0 || m.positionless {
+		return 0, false
+	}
+	return float64(m.leads[w]) / float64(n), true
+}
+
+// minPositionShare is how often a word must start names, or come later in
+// them, to be used in that position.
+const minPositionShare = 0.2
+
+// Positions reports whether a learned word can start a name (it does in at
+// least a fifth of its uses, like "dark" or "john") and whether it can come
+// later (likewise, like "wolf" or "smith"). Words the model has no position
+// data for can do both.
+func (m *Model) Positions(word string) (lead, follow bool) {
+	share, ok := m.LeadShare(word)
+	if !ok {
+		return true, true
+	}
+	return share >= minPositionShare, share <= 1-minPositionShare
+}
+
 // WordLike reports whether word, a run of letters, is made of words the
-// model learned: one of them, several run together ("juanbaker"), or either
-// after a one-letter initial ("jsmith"). An initial at the end ("smithj") is
-// not allowed, because it would also pass fragments like "cobrah". It
-// reports true for single letters, and when the model knows too few words
-// to judge.
+// model learned, as KnowsWord describes. It reports true for single letters
+// and affixes, and when the model knows too few words to judge.
 func (m *Model) WordLike(word string) bool {
-	if len(m.words) < minWordsToJudge || utf8.RuneCountInString(word) < 2 {
+	if len(m.words) < minWordsToJudge || utf8.RuneCountInString(word) < 2 || IsAffix(word) {
 		return true
 	}
 	return m.KnowsWord(word)
 }
 
-// KnowsWord reports whether word is made of words the model learned, as
-// WordLike describes, however few words the model knows.
+// KnowsWord reports whether word is made of words the model learned: one of
+// them; several run together, each piece 3+ letters, not an affix, and after
+// the first one that can come later in names ("juanbaker", not "stavroshua");
+// or a one-letter initial before a word that can come later ("jsmith", not
+// "aming"). An initial at the end ("smithj") is not allowed, because it
+// would also pass fragments like "cobrah".
 func (m *Model) KnowsWord(word string) bool {
 	w := strings.ToLower(word)
 	if m.compound(w) {
 		return true
 	}
 	_, first := utf8.DecodeRuneInString(w)
-	return m.compound(w[first:])
+	rest := w[first:]
+	if m.positionless { // no position data: accept what compound does
+		return m.compound(rest)
+	}
+	_, known := m.words[rest]
+	_, follow := m.Positions(rest)
+	return known && follow && !affixes[rest]
 }
 
 // NameWordsLike reports whether every word in name is WordLike.
@@ -342,14 +413,19 @@ func (m *Model) compound(w string) bool {
 		return true
 	}
 	var ends [4*MaxNameLen + 1]bool // ends[i]: w[:i] splits into learned words
-	if len(w) < 2 || len(w) >= len(ends) {
+	if len(w) < 2*minPieceBytes || len(w) >= len(ends) {
 		return false
 	}
 	ends[0] = true
-	for i := 2; i <= len(w); i++ {
-		for j := max(0, i-maxWordBytes); j <= i-2 && !ends[i]; j++ {
+	for i := minPieceBytes; i <= len(w); i++ {
+		for j := max(0, i-maxWordBytes); j <= i-minPieceBytes && !ends[i]; j++ {
 			if ends[j] {
-				_, ends[i] = m.words[w[j:i]]
+				piece := w[j:i]
+				_, known := m.words[piece]
+				ends[i] = known && !affixes[piece]
+				if ends[i] && j > 0 {
+					_, ends[i] = m.Positions(piece)
+				}
 			}
 		}
 	}

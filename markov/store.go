@@ -19,12 +19,14 @@ import (
 //	grams:   count, then (key length, key bytes, count) each
 //	words:   count, then (length, bytes, count) each
 //	numbers: same as words
+//	leads:   same as words (from version 3)
 //	seen:    count, then 8 little-endian bytes each
 //
-// Version 1 models were JSON holding every learned name; Load converts them.
+// Version 2 lacked leads; such models load without word positions. Version 1
+// models were JSON holding every learned name; Load converts them.
 const (
 	magic         = "USERGEN\x00"
-	formatVersion = 2
+	formatVersion = 3
 
 	maxStringLen = 1 << 16 // longest key a valid file can contain
 	maxPrealloc  = 1 << 20 // map capacity to trust from a file's counts
@@ -50,7 +52,11 @@ func (m *Model) Save(path string) (err error) {
 		uint64(m.stats.MinLen), uint64(m.stats.MaxLen)} {
 		w.uvarint(v)
 	}
-	for _, counts := range []map[string]uint32{m.grams, m.words, m.numbers} {
+	leads := m.leads
+	if m.positionless {
+		leads = nil // still without positions when loaded again
+	}
+	for _, counts := range []map[string]uint32{m.grams, m.words, m.numbers, leads} {
 		w.uvarint(uint64(len(counts)))
 		for k, c := range counts {
 			w.uvarint(uint64(len(k)))
@@ -125,7 +131,7 @@ func load(r *bufio.Reader) (*Model, error) {
 		}
 		hdr[i] = v
 	}
-	if hdr[0] != formatVersion {
+	if hdr[0] != 2 && hdr[0] != formatVersion {
 		return nil, fmt.Errorf("unsupported version %d", hdr[0])
 	}
 	if hdr[1] < 1 || hdr[1] > MaxOrder {
@@ -134,7 +140,11 @@ func load(r *bufio.Reader) (*Model, error) {
 	m := newModel(int(hdr[1]))
 	m.stats = Stats{Names: hdr[2], TotalLen: hdr[3], MinLen: int(hdr[4]), MaxLen: int(hdr[5])}
 
-	for i, dst := range []*map[string]uint32{&m.grams, &m.words, &m.numbers} {
+	counted := []*map[string]uint32{&m.grams, &m.words, &m.numbers}
+	if hdr[0] >= 3 {
+		counted = append(counted, &m.leads)
+	}
+	for i, dst := range counted {
 		counts, err := readCounts(r)
 		if err != nil {
 			return nil, err
@@ -148,6 +158,7 @@ func load(r *bufio.Reader) (*Model, error) {
 		}
 		*dst = counts
 	}
+	m.positionless = len(m.words) > 0 && len(m.leads) == 0
 
 	n, err := binary.ReadUvarint(r)
 	if err != nil {
