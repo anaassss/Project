@@ -58,15 +58,21 @@ func TestPatternsRarelyFail(t *testing.T) {
 
 func TestEmailStyleIsBuiltFromNames(t *testing.T) {
 	r := rand.New(rand.NewPCG(2, 2))
+	withName := 0
 	for range 1000 {
 		name := Username(r, Email)
 		if name != strings.ToLower(name) {
 			t.Errorf("email-style %q is not lowercase", name)
 		}
-		if !slices.ContainsFunc(firstNames, func(f string) bool { return strings.Contains(name, f) }) &&
-			!slices.ContainsFunc(lastNames, func(l string) bool { return strings.Contains(name, l) }) {
-			t.Errorf("email-style %q contains no name", name)
+		// Most contain a whole name; the rest shorten one (maria.gonz,
+		// dkowal2007).
+		if slices.ContainsFunc(firstNames, func(f string) bool { return len(f) > 2 && strings.Contains(name, f) }) ||
+			slices.ContainsFunc(lastNames, func(l string) bool { return len(l) > 2 && strings.Contains(name, l) }) {
+			withName++
 		}
+	}
+	if withName < 750 {
+		t.Errorf("only %d of 1000 email-style usernames contain a whole name", withName)
 	}
 }
 
@@ -82,14 +88,21 @@ func TestStylesDiffer(t *testing.T) {
 		return n
 	}
 	hasUpper := func(n string) bool { return n != strings.ToLower(n) }
-	if n := count(Gaming, hasUpper); n < 700 {
-		t.Errorf("only %d of 1000 gaming names use capitals", n)
+	hasDigit := func(n string) bool { return strings.ContainsAny(n, "0123456789") }
+	// Real handles are mostly lowercase; Gaming keeps a CamelCase minority.
+	if n := count(Gaming, hasUpper); n < 50 || n > 250 {
+		t.Errorf("%d of 1000 gaming names use capitals, want a minority", n)
 	}
-	if n := count(Social, hasUpper); n > 50 {
-		t.Errorf("%d of 1000 social names use capitals", n)
+	for _, s := range []Style{Email, Social} {
+		if n := count(s, hasUpper); n > 0 {
+			t.Errorf("%d of 1000 %s names use capitals", n, s)
+		}
 	}
-	if n := count(Gaming, func(n string) bool { return strings.ContainsAny(n, "0123456789") }); n < 100 {
+	if n := count(Gaming, hasDigit); n < 400 {
 		t.Errorf("only %d of 1000 gaming names have numbers", n)
+	}
+	if n := count(Email, hasDigit); n < 400 || n > 800 {
+		t.Errorf("%d of 1000 email-style names have numbers, want about half or more", n)
 	}
 }
 

@@ -258,7 +258,7 @@ shady humble gentle loud quiet frantic manic sinister vengeful valiant
 gallant loyal rabid feisty zesty sparky spooky creepy
 `)
 
-// gamingNouns lists nouns gamers put in handles: creatures, classes, weapons, space, weather, gems, food (350).
+// gamingNouns lists nouns gamers put in handles: creatures, classes, weapons, space, weather, gems, food (382).
 var gamingNouns = strings.Fields(`
 wolf fox panda tiger dragon phoenix raven hawk falcon eagle owl bear lion
 shark viper cobra ninja samurai knight wizard ranger hunter pilot rider
@@ -292,6 +292,9 @@ bot droid drone potato pickle waffle pancake bagel donut burrito nacho
 biscuit taco pizza noodle cookie muffin mango peach cherry berry honey
 coffee penguin koala bunny kitten puppy turtle dolphin whale octopus hamster
 llama sloth narwhal walrus goose duck chicken frog toad lizard gecko squid
+monkey cheese bean nugget burger bacon pepper pug cow pig hippo shrimp toast
+noob meme doge cat dog fish bird chip candy sugar spice juice soda milk rice
+pasta ramen sushi mochi
 `)
 
 // gamingTitles lists titles gamers put before a noun: SirWaffle, LordVortex (16).
@@ -331,16 +334,49 @@ angels skies moons blooms flowers wishes dreamer stargazer moonchild
 sunkissed daydreamer honeybee wildflower bluebell buttercup
 `)
 
-// hobbies lists hobbies and trades people add to their names: sarahbakes, mike.codes (59).
+// hobbies lists hobbies and trades people add to their names: sarahbakes, mike.codes (67).
 var hobbies = strings.Fields(`
-gaming games plays codes draws art music beats bakes cooks travels reads
-writes lifts runs fit photo films vlogs world zone hub life vibes daily
-official design designs studio creates makes builds dev dances sings paints
-eats style fashion beauty makeup nails fitness yoga rides skates surfs hikes
-climbs knits crafts garden plants books tech tunes mixes edits shoots
+gaming games gamer playz plays anime live yt tv dance clips codes draws art
+music beats bakes cooks travels reads writes lifts runs fit photo films
+vlogs world zone hub life vibes daily official design designs studio creates
+makes builds dev dances sings paints eats style fashion beauty makeup nails
+fitness yoga rides skates surfs hikes climbs knits crafts garden plants
+books tech tunes mixes edits shoots
 `)
 
-// socialPrefixes lists words people put before their names: itsmike, realsarah (16).
+// socialPrefixes lists words people put before their names: mr.tobias, lil_zara, iamnoah (17).
 var socialPrefixes = strings.Fields(`
-its im iam the real just hey mr ms not lil big miss sir dj doc
+mr mrs miss ms lil little big not my get iam its im the just real hey
+`)
+
+// nameSuffixes lists words people put after their names: leoboi, emmagirl (8).
+var nameSuffixes = strings.Fields(`
+boi boy girl man kid dude bro guy
+`)
+
+// relationWords lists family words in handles: noahsmama, daddy.omar (7).
+var relationWords = strings.Fields(`
+mom mum mama mommy dad daddy papa
+`)
+
+// funWords lists slang and exclamations in handles: yeet.lucas, zara.hello (19).
+var funWords = strings.Fields(`
+yeet oof lol idk bruh yolo hello hey meme epic cool boss legend vibe chill
+lit hype wow omg
+`)
+
+// webSuffixes lists file and web endings on handles: lopez.io, nina.exe (8).
+var webSuffixes = strings.Fields(`
+com io co exe png www lol jpg
+`)
+
+// gamingPrefixes lists words gamers put before a word: mrwaffle, lilpanda, supertaco (12).
+var gamingPrefixes = strings.Fields(`
+mr lil little big super epic the its my not mega ultra
+`)
+
+// gamingSuffixes lists words gamers put after a word: tacoman, pandagirl, leoplayz (19).
+var gamingSuffixes = strings.Fields(`
+boi boy girl man gamer games playz plays pro king queen xx xd yt tv hd dude
+bro master
 `)

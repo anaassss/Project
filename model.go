@@ -30,7 +30,7 @@ func describeModel(w io.Writer, path string, m *markov.Model) {
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  Patterns     %s, using %d characters of context\n", formatCount(m.Patterns()), m.Order())
 	words, numbers := m.Vocabulary()
-	fmt.Fprintf(w, "  Words        %s%s\n", formatCount(words), mostCommonList(m.TopWords(topShown)))
+	fmt.Fprintf(w, "  Words        %s%s\n", formatCount(words), mostCommonList(topWords(m, topShown)))
 	fmt.Fprintf(w, "  Numbers      %s%s\n", formatCount(numbers), mostCommonList(m.TopNumbers(topShown)))
 }
 
@@ -52,6 +52,13 @@ func fileLabel(path string) string {
 		size = fmt.Sprintf("%.1f KB", float64(info.Size())/1e3)
 	}
 	return fmt.Sprintf("%s (%s%s)", path, size, note)
+}
+
+// topWords returns m's n most common words, leaving out affixes like xx
+// and the, which frame names but say little about them.
+func topWords(m *markov.Model, n int) []string {
+	words := slices.DeleteFunc(m.TopWords(4*n), markov.IsAffix)
+	return words[:min(n, len(words))]
 }
 
 func mostCommonList(items []string) string {
@@ -143,7 +150,7 @@ func describeClaude(w io.Writer) {
 	for i, m := range knowledge.Models() {
 		words, _ := m.Vocabulary()
 		fmt.Fprintf(w, "  %-12s %s usernames, %s words%s\n", knowledge.Styles[i],
-			formatCount(int(m.Stats().Names)), formatCount(words), mostCommonList(m.TopWords(6)))
+			formatCount(int(m.Stats().Names)), formatCount(words), mostCommonList(topWords(m, 6)))
 	}
 }
 

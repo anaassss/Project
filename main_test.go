@@ -103,8 +103,8 @@ func TestMenuTrainThenEditOwn(t *testing.T) {
 		t.Fatalf("no edits saved:\n%s", got)
 	}
 	edits := readLines(t, saved[2])
-	if len(edits) == 0 || len(edits) > 20 {
-		t.Fatalf("%s has %d lines, want 1-20", saved[2], len(edits))
+	if len(edits) == 0 || len(edits) > 30 { // up to 10 for each of 3 lines
+		t.Fatalf("%s has %d lines, want 1-30", saved[2], len(edits))
 	}
 	for _, ed := range edits {
 		if strings.EqualFold(ed, "ShadowFox") || strings.EqualFold(ed, "DarkWolf_7") {

@@ -25,6 +25,7 @@ import (
 	"math/rand/v2"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -77,10 +78,54 @@ type source struct {
 	leads   []string // those that can start a name: dark, john
 	tails   []string // those that can come later: wolf, smith
 	numbers []string // learned numbers, most common first
+
+	// byShape groups numbers by numberShape, so a number is swapped for one
+	// like it: a year for a year, 4137 for another random 4-digit number.
+	byShape map[int][]string
+}
+
+// numberShape is a number's length, and whether it looks like a year.
+func numberShape(n string) int {
+	year := len(n) == 4 && (strings.HasPrefix(n, "19") || strings.HasPrefix(n, "20"))
+	if year {
+		return -4
+	}
+	return len(n)
+}
+
+// minShapeNumbers is how many learned numbers of a shape are needed to
+// swap from; with fewer, a random number of that shape is made instead.
+const minShapeNumbers = 5
+
+// numberLike returns a number shaped like num, from src's learned numbers
+// when it knows enough of them.
+func (src source) numberLike(rng *rand.Rand, num string) string {
+	shape := numberShape(num)
+	if same := src.byShape[shape]; len(same) >= minShapeNumbers {
+		return same[rng.IntN(len(same))]
+	}
+	if shape < 0 {
+		return strconv.Itoa(1975 + rng.IntN(38))
+	}
+	b := make([]byte, len(num))
+	for {
+		for i := range b {
+			b[i] = byte('0' + rng.IntN(10))
+		}
+		if num[0] != '0' && b[0] == '0' {
+			b[0] = byte('1' + rng.IntN(9))
+		}
+		if numberShape(string(b)) == shape { // not a year by accident
+			return string(b)
+		}
+	}
 }
 
 func newSource(m *markov.Model) source {
-	src := source{m: m, numbers: m.TopNumbers(vocabNumbers)}
+	src := source{m: m, numbers: m.TopNumbers(vocabNumbers), byShape: map[int][]string{}}
+	for _, n := range src.numbers {
+		src.byShape[numberShape(n)] = append(src.byShape[numberShape(n)], n)
+	}
 	for _, w := range m.TopWords(vocabWords) {
 		if markov.IsAffix(w) {
 			continue // affixes frame names; they aren't swapped in
@@ -153,6 +198,75 @@ func (e *Editor) fitting(segs []markov.Segment) []source {
 	return out
 }
 
+// splitJoined splits lowercase words that run a learned word together with
+// more ("darkwolf" → "dark" + "wolf", "lucasbrenn" → "lucas" + "brenn"), so
+// each part can be swapped on its own and edits keep the name's joined
+// shape. The first part must be a learned word that starts names. The rest
+// must be a learned word that comes later in names, with the whole 7+
+// letters, or be 4+ letters after a first part of 4+. That keeps names the
+// knowledge doesn't know, like "warren" or "egemen", from being cut into
+// fragments ("ege" + "men"). A leading affix comes off before a learned
+// word of 4+ letters ("itsmike" → "its" + "mike"), so the name can be
+// swapped and the affix kept. Words learned whole, affixes, and non-ASCII
+// words are left alone.
+func (e *Editor) splitJoined(segs []markov.Segment) []markov.Segment {
+	knows := func(w string) bool {
+		return slices.ContainsFunc(e.sources, func(s source) bool { return s.m.HasWord(w) })
+	}
+	// can reports whether a source knows w in the first place (lead) or a
+	// later one.
+	can := func(w string, lead bool) bool {
+		return slices.ContainsFunc(e.sources, func(s source) bool {
+			l, f := s.m.Positions(w)
+			return s.m.HasWord(w) && (lead && l || !lead && f)
+		})
+	}
+	var out []markov.Segment
+	for _, seg := range segs {
+		w := seg.Text
+		if seg.Kind != markov.Word || len(w) < 6 || w != strings.ToLower(w) || !isASCII(w) || knows(w) {
+			out = append(out, seg)
+			continue
+		}
+		cut := 0
+		for _, p := range leadingAffixes {
+			if rest, ok := strings.CutPrefix(w, p); ok && len(rest) >= 4 && knows(rest) {
+				cut = len(p)
+				break
+			}
+		}
+		for n := len(w) - 3; n >= 3 && cut == 0; n-- {
+			p, rest := w[:n], w[n:]
+			if markov.IsAffix(p) || !can(p, true) {
+				continue
+			}
+			if len(w) >= 7 && (max(len(p), len(rest)) >= 4 && can(rest, false) || len(p) >= 4 && len(rest) >= 4) {
+				cut = n
+				break
+			}
+		}
+		if cut == 0 {
+			out = append(out, seg)
+			continue
+		}
+		out = append(out, markov.Segment{Text: w[:cut], Kind: markov.Word}, markov.Segment{Text: w[cut:], Kind: markov.Word})
+	}
+	return out
+}
+
+// leadingAffixes are the affixes that start joined names, longest first
+// where one starts another ("mrs" before "mr").
+var leadingAffixes = []string{"official", "real", "just", "miss", "mrs", "its", "the", "iam", "hey", "not", "lil", "get", "mr", "ms", "im", "my"}
+
+func isASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
 // hashSet holds the fingerprints of one username's edits: a slice while
 // small, a map once there are many (when Max is 0).
 type hashSet struct {
@@ -205,7 +319,7 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 		dst = append(dst, cand)
 	}
 
-	segs := markov.Split(name)
+	segs := e.splitJoined(markov.Split(name))
 	// Swappable parts are numbers and words of 2+ letters other than affixes
 	// (xX, The, its), which are kept. The first such word is the lead: it is
 	// swapped for words that usually start names, later ones for words that
@@ -281,6 +395,9 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 	vocabFor := func(src source, i int) []string {
 		switch {
 		case segs[i].Kind == markov.Number:
+			if same := src.byShape[numberShape(segs[i].Text)]; len(same) >= minShapeNumbers {
+				return same
+			}
 			return src.numbers
 		case i == lead && len(src.leads) > 0:
 			return src.leads
@@ -319,7 +436,11 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 				continue
 			}
 			i := swappable[rng.IntN(len(swappable))]
-			if vocab := vocabFor(src, i); len(vocab) > 0 {
+			if segs[i].Kind == markov.Number {
+				if v := src.numberLike(rng, segs[i].Text); v != segs[i].Text {
+					add(join(segs, i, v, styles[i]))
+				}
+			} else if vocab := vocabFor(src, i); len(vocab) > 0 {
 				if v := vocab[rng.IntN(len(vocab))]; !strings.EqualFold(v, segs[i].Text) {
 					add(join(segs, i, v, styles[i]))
 				}

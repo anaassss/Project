@@ -240,7 +240,13 @@ func (t *tally) add(order int, name string, offs []int) []int {
 	lead := true // the next content word is the name's first
 	for i, seg := range segs {
 		switch {
-		case seg.Kind == Word && wordCount >= 2 && utf8.RuneCountInString(seg.Text) >= 2 && !leetNeighbour(segs, i):
+		case seg.Kind == Word && utf8.RuneCountInString(seg.Text) == 1:
+			// An initial is the name's first word (r.lindqvist), except the x
+			// of an xX...Xx wrapper.
+			if seg.Text != "x" && seg.Text != "X" {
+				lead = false
+			}
+		case seg.Kind == Word && wordCount >= 2 && !leetNeighbour(segs, i):
 			w := strings.ToLower(seg.Text)
 			t.words[w]++
 			if !IsAffix(w) {
@@ -323,19 +329,26 @@ const (
 )
 
 // affixes are the wrappers and connectors usernames are built with rather
-// than words that carry meaning: xX...Xx, its/the/real + name, name.and.name,
-// peach.jpg, NovaTV.
+// than words that carry meaning: xX...Xx, its/the/real/my + name,
+// name.and.name, peach.jpg, lopez.io, NovaTV.
 var affixes = map[string]bool{
 	"xx": true, "the": true, "its": true, "im": true, "iam": true, "real": true,
 	"just": true, "hey": true, "not": true, "nota": true, "ii": true, "and": true,
 	"xo": true, "jpg": true, "png": true, "exe": true, "tv": true, "yt": true,
 	"ttv": true, "hd": true, "gg": true, "mr": true, "ms": true, "mrs": true,
-	"lil": true, "official": true,
+	"lil": true, "official": true, "com": true, "io": true, "co": true,
+	"www": true, "xd": true, "lol": true, "my": true, "get": true, "miss": true,
 }
 
 // IsAffix reports whether word (in any case) is a username affix such as
 // "xX", "its" or "jpg", which frames a name rather than carrying meaning.
 func IsAffix(word string) bool { return affixes[strings.ToLower(word)] }
+
+// HasWord reports whether word (in any case) was learned as a word.
+func (m *Model) HasWord(word string) bool {
+	_, ok := m.words[strings.ToLower(word)]
+	return ok
+}
 
 // LeadShare reports the share of a learned word's appearances in which it
 // was a name's first word: near 1 for words like "dark" and "john", near 0

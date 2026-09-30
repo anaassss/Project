@@ -330,3 +330,66 @@ func TestEditKeepsAffixes(t *testing.T) {
 		}
 	}
 }
+
+func TestEditSplitsJoinedNames(t *testing.T) {
+	e := editor(t, Options{Max: 0})
+	segs := e.splitJoined(markov.Split("shadowbyte2004"))
+	var got []string
+	for _, s := range segs {
+		got = append(got, s.Text)
+	}
+	if strings.Join(got, "|") != "shadow|byte|2004" {
+		t.Errorf("splitJoined(shadowbyte2004) = %v", got)
+	}
+	for name, want := range map[string]string{"darkwolf": "dark|wolf", "itsshadow": "its|shadow", "mrsmoon": "mrs|moon", "mrhawk": "mr|hawk"} {
+		var got []string
+		for _, s := range e.splitJoined(markov.Split(name)) {
+			got = append(got, s.Text)
+		}
+		if strings.Join(got, "|") != want {
+			t.Errorf("splitJoined(%s) = %v, want %s", name, got, want)
+		}
+	}
+	// Names the model doesn't know aren't cut into fragments: "wolf" never
+	// starts names, "red" is too short to be followed by an unknown rest,
+	// and "redder" is too short to split at all.
+	for _, name := range []string{"shadow", "ab12", "ShadowByte", "zzqqvv", "wolfgang", "reddington", "redder", "official", "itsred"} {
+		if segs := e.splitJoined(markov.Split(name)); len(segs) != len(markov.Split(name)) {
+			t.Errorf("splitJoined split %q into %v", name, segs)
+		}
+	}
+	// Edits of a joined name swap one part and stay joined.
+	for _, ed := range e.Edit(rng(), "shadowbyte2004", nil) {
+		if strings.ContainsAny(ed, "._-") || ed != strings.ToLower(ed) {
+			t.Errorf("edit %q of shadowbyte2004 isn't joined lowercase", ed)
+		}
+	}
+	// A leading affix is kept while the name after it is swapped.
+	swapped := false
+	for _, ed := range e.Edit(rng(), "itsshadow", nil) {
+		if !strings.HasPrefix(ed, "its") {
+			t.Errorf("edit %q of itsshadow lost its prefix", ed)
+		}
+		swapped = swapped || !strings.Contains(ed, "shadow")
+	}
+	if !swapped {
+		t.Error("no edit of itsshadow swapped the name after its")
+	}
+}
+
+func TestNumberSwapsKeepShape(t *testing.T) {
+	e := editor(t, Options{Max: 40})
+	src := e.sources[0]
+	r := rng()
+	for _, num := range []string{"4137", "2004", "975", "0108", "7"} {
+		for range 20 {
+			got := src.numberLike(r, num)
+			if len(got) != len(num) || numberShape(got) != numberShape(num) {
+				t.Errorf("numberLike(%q) = %q, not the same shape", num, got)
+			}
+			if num[0] != '0' && got[0] == '0' {
+				t.Errorf("numberLike(%q) = %q starts with 0", num, got)
+			}
+		}
+	}
+}

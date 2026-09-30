@@ -34,13 +34,13 @@ Choose 1-3 [3]: 2
 Edits per username (1-1000, or max) [10]: 4
 File: mine.txt
 Editing  [██████████████████████████████] 100%
-Saved 22 edited usernames (6-14 characters) to edited_22.txt in 33ms
+Saved 21 edited usernames (6-14 characters) to edited_21.txt in 71ms
 ```
 
 `mine.txt` held `john.smith`, `maria.garcia92`, `jsmith`, `SilentWolf`,
-`itsmike` and `xXShadowXx`; `edited_22.txt` holds `ford.smith`,
-`john.smith1990`, `ramos.garcia92`, `jsmith96`, `SilentSteel`, `ArtistWolf`,
-`itsmike_art`, `xXShadowIron` and so on.
+`itsmike` and `xXShadowXx`; `edited_21.txt` holds `samantha.smith`,
+`john.mariam`, `amber.garcia92`, `maria.garcia82`, `jsmith100`,
+`SilentTurtle`, `HolyWolf`, `itsbecky`, `itslorenzo`, `xXMooseXx` and so on.
 
 1. **Training** learns from a file of usernames (one per line) into your own
    knowledge, saved in `usergen.model`. Each run adds to it rather than
@@ -65,24 +65,32 @@ result.
 ## Claude knowledge
 
 Rather than a list of anyone's real accounts, it is the patterns real
-usernames follow, combined with:
+usernames follow, tuned to how everyday accounts look: almost all lowercase,
+half with a number (a birth year, a 2-4 digit number, a date, or a favourite
+like `123` or `007`), and names run together, dotted or cut short more often
+than a plain `firstname.lastname`. The patterns are filled from:
 
-- about 1,250 first names and nicknames and 1,200 last names from the US and
+- about 1,250 first names and nicknames and 1,180 last names from the US and
   UK, Latin America, Europe, the Nordics, Eastern Europe, the Arab world,
   Turkey, Iran, South Asia, East and Southeast Asia, and Africa;
-- 180 adjectives and 350 nouns gamers use (creatures, classes, weapons,
-  space, weather, gems, food), and titles like Sir, Lord and Captain;
-- 245 words social handles are made of, 60 hobbies and trades, and the
-  prefixes people put before their names.
+- 180 adjectives and 380 nouns gamers use (creatures, animals, classes,
+  weapons, space, weather, gems, food), with the prefixes and endings they
+  add (`lil`, `mr`, `epic`, `gamer`, `playz`, `pro`, `yt`, `xd`);
+- 245 words social handles are made of, 67 hobbies, what people put before
+  their names (`its`, `iam`, `mr`, `miss`, `lil`), family words (`mom`,
+  `mama`, `dad`), and endings like `.io`, `.png` and `.exe`.
 
-It is learned from 100,000 usernames of each style, built in about half a
-second when first needed:
+Brand and game names and crude words are left out on purpose. To get
+usernames that use them, train your own knowledge on a list that does.
+
+It is learned from 100,000 usernames of each style, built in under a second
+when first needed:
 
 | Style | Patterns | Examples |
 |-------|----------|----------|
-| Email | first.last, firstlast, flast, f.last, firstl, last.first, lastfirst, first.m.last, firstmlast, j.m.last, double surnames, and those with birth years or numbers | `john.smith`, `jsmith`, `neha.walker72`, `lnguyen1982`, `maria.garcia-lopez` |
-| Gaming | AdjectiveNoun, NounNoun, with numbers, xX…Xx, TheNoun, Sir/Lord/Captain + Noun, channel names, adj_noun, Noun.exe, iiNoun, NotANoun | `SilentWolf`, `xXShadowXx`, `SirWaffle`, `Vortex.exe`, `NovaTTV`, `dark_knight` |
-| Social | its/real/the + name, name + hobby, name + number, word.word, _name_, x.name.x, name.xo, name.and.name, word.jpg, name-dev | `itsmike`, `sarahbakes`, `lunar.dreams`, `_lily_`, `mike.and.jess`, `peach.jpg` |
+| Email | first name + number, first.last, first name + part of a surname, first name + initials, initial + surname, surname + number, with birth years, dates or 2-4 digit numbers | `judy1981`, `monicatorres`, `jean.p1994`, `mchavez2004`, `ginevra.ro`, `tasnim_koski` |
+| Gaming | word + number, two words run together, word + gamer/playz/pro/xd, lil/mr/epic + word, word.word, word.exe; a few in CamelCase (AdjectiveNoun, TheNoun, xX…Xx) | `frog9241`, `noodlesorcerer`, `ramenplayz`, `lilfiend8690`, `fire.storm`, `TheSerpent` |
+| Social | name + hobby, its/iam/mr/miss + name, name + mama/dad/kid, name + word, name.io, name + xd, ilike + food, name.and.name | `felix.designs2010`, `mr.colton`, `evansmama07`, `mint.priya`, `hanaxd`, `fitness.rizky` |
 
 You don't choose a style: each username is edited with whichever knowledge
 knows its words best, so `john.smith` gets email-style edits and
@@ -94,9 +102,9 @@ the same terms.
 Own knowledge
   Nothing learned yet. Choose 1 - Training to teach it.
 Claude knowledge (built in)
-  Email-style  96,275 usernames, 2,381 words; most common: kelly, lucas, santiago, lorenzo, young, quinn
-  Gaming       74,883 usernames, 552 words; most common: xx, the, queen, chief, captain, lord
-  Social       83,274 usernames, 1,553 words; most common: and, dev, xo, vibes, png, garden
+  Email-style  99,007 usernames, 4,648 words; most common: levi, ren, leon, oliver, kelly, graham
+  Gaming       91,730 usernames, 584 words; most common: captain, chief, king, lord, queen, live
+  Social       93,122 usernames, 1,606 words; most common: mommy, daddy, mum, papa, dad, mama
 ```
 
 ## Settings
@@ -147,10 +155,10 @@ Measured on a 4-core machine; more cores are faster.
 
 | Task | Input | Time |
 |------|-------|------|
-| Training | 2,000,000 lines | 1.5 s |
-| Edit, own knowledge | 1,000,000 usernames → 6.0M edits | 6.0 s |
-| Edit, Claude knowledge | 1,000,000 usernames → 5.4M edits | 6.3 s |
-| Edit, both | 1,000,000 usernames → 6.1M edits | 7.1 s |
+| Training | 2,000,000 lines | 1.8 s |
+| Edit, own knowledge | 1,000,000 usernames → 6.1M edits | 7.5 s |
+| Edit, Claude knowledge | 1,000,000 usernames → 6.0M edits | 7.9 s |
+| Edit, both | 1,000,000 usernames → 6.4M edits | 9.8 s |
 
 Training checks and deduplicates names in file order, then counts patterns on
 every core. Editing splits the input across every core and writes results in
@@ -186,6 +194,15 @@ goes: whether it starts names (`dark`, `john`) or comes later (`wolf`,
 `john.washington` or `samir.smith`, never `john.priya` or `WolfFox`.
 Wrappers like `xX…Xx`, `The` and `its` stay in place and are never swapped
 in.
+
+Lowercase names that run words together are split where a learned word
+ends (`samforest2004` → `sam` `forest` `2004`, `itsnoah` → `its` `noah`),
+so each part can be swapped and the edit stays joined: `aymanforest2004`,
+`itsgregory`. The first part must be a word that starts names, so names the
+knowledge doesn't know, like `warren`, are never cut into fragments. Numbers
+are swapped for numbers of the same shape: a year for a year
+(`samforest2012`), three digits for three digits (`wolfpanda975` →
+`wolfpanda123`).
 
 The saved file has one username per line with no duplicates. It leaves out
 the usernames you gave it and names any knowledge in use learned from. It is never

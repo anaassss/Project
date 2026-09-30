@@ -371,10 +371,10 @@ func TestWordLike(t *testing.T) {
 
 func TestWordPositions(t *testing.T) {
 	m, _ := New(3)
-	for _, name := range []string{"DarkWolf", "DarkFox", "SilentWolf", "xXDarkRavenXx", "TheDarkOwl", "IronWolf"} {
+	for _, name := range []string{"DarkWolf", "DarkFox", "SilentWolf", "xXDarkRavenXx", "TheDarkOwl", "IronWolf", "r.lindqvist", "t.okafor07", "lindqvist.john"} {
 		m.Learn(name)
 	}
-	for word, want := range map[string]float64{"dark": 1, "wolf": 0, "raven": 0, "silent": 1} {
+	for word, want := range map[string]float64{"dark": 1, "wolf": 0, "raven": 0, "silent": 1, "okafor": 0, "lindqvist": 0.5} {
 		if got, ok := m.LeadShare(word); !ok || got != want {
 			t.Errorf("LeadShare(%q) = %v, %v; want %v", word, got, ok, want)
 		}
