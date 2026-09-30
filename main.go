@@ -109,6 +109,7 @@ func generate(args []string) error {
 	seed := flags.Uint64("seed", 0, "random seed for repeatable output (0 = random)")
 	allowKnown := flags.Bool("allow-known", false, "allow usernames that appear in the training data")
 	know := flags.String("knowledge", bothKnowledge, "knowledge to generate from: own, claude or both")
+	unique := flags.Bool("unique", true, uniqueUsage)
 	flags.Parse(args)
 
 	own, err := ownOrNil(*modelPath)
@@ -128,7 +129,7 @@ func generate(args []string) error {
 		Temperature: *temp,
 		Order:       *order,
 		AllowKnown:  *allowKnown,
-	}, orRandom(*seed), nil)
+	}, *unique, orRandom(*seed), nil)
 	if err != nil {
 		return err
 	}

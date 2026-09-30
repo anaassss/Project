@@ -15,6 +15,9 @@ import (
 
 // Edit module: rewrite the usernames in a file using what the model learned.
 
+// uniqueUsage describes the -unique flag of edit and generate.
+const uniqueUsage = "only lowercase email-style usernames, without decorations (its, xX, playz, .io) or plain names (johnkevin, emma2008)"
+
 const (
 	defaultMaxEdits = 10
 
@@ -34,6 +37,7 @@ func editCommand(args []string) error {
 	maxLen := flags.Int("max", markov.MaxNameLen, "longest edit, in characters")
 	seed := flags.Uint64("seed", 0, "random seed for repeatable output (0 = random)")
 	allowKnown := flags.Bool("allow-known", false, "allow edits that are usernames the model learned from")
+	unique := flags.Bool("unique", true, uniqueUsage)
 	flags.Parse(args)
 	if flags.NArg() != 1 {
 		return errors.New("edit needs exactly one file of usernames")
@@ -54,7 +58,7 @@ func editCommand(args []string) error {
 	if note != "" {
 		fmt.Fprintln(os.Stderr, note)
 	}
-	opts := edit.Options{Max: perName, AllowKnown: *allowKnown, MinLen: *minLen, MaxLen: *maxLen}
+	opts := edit.Options{Max: perName, AllowKnown: *allowKnown, MinLen: *minLen, MaxLen: *maxLen, Unique: *unique}
 	summary, err := editFile(models, flags.Arg(0), opts, *seed, ".", terminalOrNil(os.Stderr))
 	if err != nil {
 		return err

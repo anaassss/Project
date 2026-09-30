@@ -118,7 +118,7 @@ func TestMenuTrainThenEditOwn(t *testing.T) {
 
 func TestMenuEditClaudeAndMax(t *testing.T) {
 	t.Chdir(t.TempDir())
-	writeFile(t, "mine.txt", "john.smith\nSilentWolf\n")
+	writeFile(t, "mine.txt", "john.smith\nmaria.lopez92\n")
 	got := runMenu(t,
 		"2", "", "",
 		"1",      // own: nothing trained yet, so refused
@@ -137,20 +137,20 @@ func TestMenuEditClaudeAndMax(t *testing.T) {
 	if len(edits) < 100 {
 		t.Errorf("max gave only %d edits for 2 names", len(edits))
 	}
-	var email, gaming int
+	var john, maria int
 	for _, ed := range edits {
+		if ed != strings.ToLower(ed) || !knowledge.Unique(ed) {
+			t.Errorf("edit %q isn't lowercase and knowledge.Unique", ed)
+		}
 		switch {
 		case strings.HasPrefix(ed, "john.") || strings.HasSuffix(ed, ".smith"):
-			email++
-			if ed != strings.ToLower(ed) {
-				t.Errorf("email-style edit %q isn't lowercase", ed)
-			}
-		case strings.HasPrefix(ed, "Silent") || strings.HasSuffix(ed, "Wolf"):
-			gaming++
+			john++
+		case strings.HasPrefix(ed, "maria.") || strings.Contains(ed, ".lopez"):
+			maria++
 		}
 	}
-	if email < 20 || gaming < 20 {
-		t.Errorf("edits don't cover both names: %d email-style, %d gaming", email, gaming)
+	if john < 20 || maria < 20 {
+		t.Errorf("edits don't cover both names: %d of john.smith, %d of maria.lopez92", john, maria)
 	}
 	c, _ := loadSettings(settingsFile)
 	if c.Knowledge != claudeKnowledge || c.EditsPerName != 0 {
@@ -199,8 +199,6 @@ func TestMenuInfoAndClear(t *testing.T) {
 		"Usernames    156 learned, 3-15 characters",
 		"most common: wolf,",
 		"Claude knowledge (built in)\n  Email-style  ",
-		"  Gaming       ",
-		"  Social       ",
 		"(156 usernames) and cannot be undone. Claude's built-in knowledge stays.",
 		"Nothing cleared.",
 		"Own knowledge cleared.",
@@ -251,8 +249,8 @@ func TestMenuSettingsApply(t *testing.T) {
 		"8", "20", // generate shortest 20 > longest 16: refused
 		"7", "7", // generate 7 usernames
 		"12",       // knowledge: both → own
-		"14", "42", // seed
-		"15", "other.model", // own knowledge file
+		"15", "42", // seed
+		"16", "other.model", // own knowledge file
 		"0",
 		"1", "names.txt", // train into other.model
 		"2", "", "", "", "", "mine.txt", // edit with the saved choices
@@ -264,7 +262,8 @@ func TestMenuSettingsApply(t *testing.T) {
 		"Not changed: generate lengths must be 3-24.",
 		"Not changed: generate shortest length 20 is above longest length 16.",
 		"   12  Knowledge (own, claude or both)                own",
-		"   15  File                                           other.model",
+		"   13  Unique email style (no plain or decorated)     on",
+		"   16  File                                           other.model",
 		"Saved 7 new usernames to generated_7.txt",
 	)
 	if _, err := os.Stat("other.model"); err != nil {
@@ -335,21 +334,35 @@ func TestEditCommand(t *testing.T) {
 }
 
 func TestGenerateFrom(t *testing.T) {
-	models := knowledge.Models()
-	opts := markov.GenerateOptions{MinLen: 4, MaxLen: 16, Temperature: 1}
-	names, err := generateFrom(models, 21, opts, 5, nil)
+	own, _ := markov.New(3)
+	f, err := os.Open("testdata/usernames.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(names) != 21 {
-		t.Errorf("got %d names, want 21", len(names))
+	defer f.Close()
+	if _, err := own.LearnFrom(f, nil); err != nil {
+		t.Fatal(err)
 	}
-	seen := map[string]bool{}
-	for _, n := range names {
-		if seen[strings.ToLower(n)] || slices.ContainsFunc(models, func(m *markov.Model) bool { return m.Knows(n) }) {
-			t.Errorf("%q is a duplicate or a learned name", n)
+	models := []*markov.Model{own, knowledge.Model()}
+	opts := markov.GenerateOptions{MinLen: 4, MaxLen: 16, Temperature: 1}
+	for _, unique := range []bool{false, true} {
+		names, err := generateFrom(models, 21, opts, unique, 5, nil)
+		if err != nil {
+			t.Fatal(err)
 		}
-		seen[strings.ToLower(n)] = true
+		if len(names) != 21 {
+			t.Errorf("unique=%v: got %d names, want 21", unique, len(names))
+		}
+		seen := map[string]bool{}
+		for _, n := range names {
+			if seen[strings.ToLower(n)] || slices.ContainsFunc(models, func(m *markov.Model) bool { return m.Knows(n) }) {
+				t.Errorf("%q is a duplicate or a learned name", n)
+			}
+			seen[strings.ToLower(n)] = true
+			if unique && (n != strings.ToLower(n) || !knowledge.Unique(n)) {
+				t.Errorf("unique name %q isn't lowercase and knowledge.Unique", n)
+			}
+		}
 	}
 }
 

@@ -106,12 +106,12 @@ func knowledgeFor(choice string, own *markov.Model) ([]*markov.Model, string, er
 		}
 		return []*markov.Model{own}, "", nil
 	case claudeKnowledge:
-		return knowledge.Models(), "", nil
+		return []*markov.Model{knowledge.Model()}, "", nil
 	case bothKnowledge:
 		if own == nil {
-			return knowledge.Models(), "No own knowledge yet, so using Claude's.", nil
+			return []*markov.Model{knowledge.Model()}, "No own knowledge yet, so using Claude's.", nil
 		}
-		return append([]*markov.Model{own}, knowledge.Models()...), "", nil
+		return []*markov.Model{own, knowledge.Model()}, "", nil
 	}
 	return nil, "", fmt.Errorf("unknown knowledge %q: use own, claude or both", choice)
 }
@@ -147,16 +147,20 @@ func editsLabel(n int) string {
 
 // describeClaude prints what Claude's built-in knowledge contains.
 func describeClaude(w io.Writer) {
-	for i, m := range knowledge.Models() {
-		words, _ := m.Vocabulary()
-		fmt.Fprintf(w, "  %-12s %s usernames, %s words%s\n", knowledge.Styles[i],
-			formatCount(int(m.Stats().Names)), formatCount(words), mostCommonList(topWords(m, 6)))
-	}
+	m := knowledge.Model()
+	words, _ := m.Vocabulary()
+	fmt.Fprintf(w, "  Email-style  %s usernames, %s words%s\n",
+		formatCount(int(m.Stats().Names)), formatCount(words), mostCommonList(topWords(m, 6)))
 }
 
 // generateFrom generates up to count distinct usernames, sharing the count
-// between models. progress, if non-nil, is called with the total found.
-func generateFrom(models []*markov.Model, count int, opts markov.GenerateOptions, seed uint64, progress func(int)) ([]string, error) {
+// between models. With unique, they are lowercase and knowledge.Unique, as
+// edit.Options.Unique makes edits. progress, if non-nil, is called with the
+// total found.
+func generateFrom(models []*markov.Model, count int, opts markov.GenerateOptions, unique bool, seed uint64, progress func(int)) ([]string, error) {
+	if unique {
+		opts.Keep = knowledge.Unique
+	}
 	rng := rand.New(rand.NewPCG(seed, seed))
 	var names []string
 	seen := map[uint64]bool{}
@@ -183,6 +187,9 @@ func generateFrom(models []*markov.Model, count int, opts markov.GenerateOptions
 			known := !opts.AllowKnown && slices.ContainsFunc(models, func(m *markov.Model) bool { return m.KnowsHash(h) })
 			if !seen[h] && !known {
 				seen[h] = true
+				if unique {
+					name = strings.ToLower(name)
+				}
 				names = append(names, name)
 			}
 		}

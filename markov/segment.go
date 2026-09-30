@@ -35,7 +35,36 @@ func kindOf(r rune) SegmentKind {
 
 // Split breaks a username into words, numbers and separators, splitting
 // words at case changes: "xXShadowWolf_99" → x, X, Shadow, Wolf, _, 99.
+// Segments are substrings of name, so for names up to MaxNameLen characters
+// Split allocates only the slice.
 func Split(name string) []Segment {
+	var runes [MaxNameLen]rune
+	var offs [MaxNameLen + 1]int
+	n := 0
+	for i, r := range name {
+		if n == len(runes) {
+			return splitLong(name)
+		}
+		runes[n], offs[n] = r, i
+		n++
+	}
+	if n == 0 {
+		return nil
+	}
+	offs[n] = len(name)
+	segs := make([]Segment, 0, 8)
+	start := 0
+	for i := 1; i <= n; i++ {
+		if i == n || boundary(runes[:n], i) {
+			segs = append(segs, Segment{name[offs[start]:offs[i]], kindOf(runes[start])})
+			start = i
+		}
+	}
+	return segs
+}
+
+// splitLong is Split for names too long for its buffers.
+func splitLong(name string) []Segment {
 	runes := []rune(name)
 	var segs []Segment
 	start := 0

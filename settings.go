@@ -34,7 +34,8 @@ type settings struct {
 	GenTemp      float64 `json:"generate_creativity"`
 	GenOrder     int     `json:"generate_context"` // 0 means the model's order
 	AllowKnown   bool    `json:"allow_known"`
-	Seed         uint64  `json:"seed"` // 0 means random each time
+	Unique       bool    `json:"unique_style"` // see edit.Options.Unique
+	Seed         uint64  `json:"seed"`         // 0 means random each time
 }
 
 func defaultSettings() settings {
@@ -49,6 +50,7 @@ func defaultSettings() settings {
 		GenMinLen:    4,
 		GenMaxLen:    16,
 		GenTemp:      1,
+		Unique:       true,
 	}
 }
 
@@ -224,6 +226,7 @@ var options = []option{
 			c.Knowledge = knowledgeChoices[(i+1)%len(knowledgeChoices)]
 		},
 	},
+	boolOption("Edit and Generate", "Unique email style (no plain or decorated)", func(c *settings) *bool { return &c.Unique }),
 	boolOption("Edit and Generate", "Allow usernames the knowledge learned from", func(c *settings) *bool { return &c.AllowKnown }),
 	{
 		group: "Edit and Generate",

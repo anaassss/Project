@@ -5,7 +5,7 @@ import "strings"
 // Word lists the patterns draw from. None of this is anyone's actual
 // username.
 
-// firstNames lists common first names and nicknames from many countries (1254).
+// firstNames lists first names and nicknames from many countries (1253).
 var firstNames = strings.Fields(`
 james john robert michael william david richard joseph thomas charles
 christopher daniel matthew anthony mark donald steven paul andrew joshua
@@ -103,7 +103,7 @@ saki nana koharu minato jisoo minjun seojun jiho doyun hajun siwoo jiwoo
 seoyeon jiwon minseo seoyun hayoon jiyu yuna chaewon eunji hyejin jihye
 soyeon taeyang hyun joon woo seung jin young anh minh linh thanh huong lan
 trang ngoc duc tuan hung quang khanh phuong thao vy nam long tien dat kiet
-bao my hieu thu ha thuy trinh angelo carlo rico jericho jasmine rhea bea
+bao hieu thu ha thuy trinh angelo carlo rico jericho jasmine rhea bea
 kristine budi agus dewi sri putri putra ayu rizky fajar dimas bayu rina wati
 ratna siti adi andi wahyu yogi indra hendra somchai niran anong ploy mali
 nok kwame kofi kojo ama akua abena yaw kwaku adwoa efua chidi chinedu emeka
@@ -119,8 +119,83 @@ freddy izzy lizzy maddie addie kenzie mackenzie liv livvy allie ally gigi
 lulu coco jojo
 `)
 
-// lastNames lists common last names from many countries (1182).
-var lastNames = strings.Fields(`
+// americasFirstNames lists the first names above that are common in English- and Spanish-speaking countries (560).
+var americasFirstNames = strings.Fields(`
+james john robert michael william david richard joseph thomas charles
+christopher daniel matthew anthony mark donald steven paul andrew joshua
+kenneth kevin brian george timothy ronald edward jason jeffrey ryan jacob
+gary nicholas eric jonathan stephen larry justin scott brandon benjamin
+samuel gregory alexander frank patrick raymond jack dennis jerry tyler aaron
+adam nathan henry douglas zachary peter kyle noah ethan jeremy walter
+christian keith roger terry austin sean gerald carl harold dylan arthur
+lawrence jordan jesse bryan billy bruce gabriel joe logan alan albert wayne
+randy vincent mason roy ralph bobby russell bradley philip eugene liam
+oliver lucas aiden jayden carter owen luke isaac caleb hunter connor landon
+evan colton cameron chase blake cole wyatt levi hudson grayson easton jaxon
+asher lincoln miles leo max oscar harry charlie alfie freddie archie theo
+toby finley reggie teddy louie rory ollie jamie callum declan kieran jake
+josh tom ben dan sam alex chris mike matt nick tony steve rob will ed ted
+jim tim andy danny tommy jimmy johnny joey kenny ricky jeff greg brad derek
+travis troy shane dustin marcus darren trevor spencer seth grant dean neil
+ross craig stuart graham gavin colin martin simon ian nigel barry trent reid
+brett dale glenn clay beau jace kai ezra silas jasper felix hugo arlo milo
+otis rowan finn ronan elliot emmett everett beckett brody bryce tristan
+maddox ryder rhys harvey jenson zach nate gabe drew mary patricia jennifer
+linda elizabeth barbara susan jessica sarah karen lisa nancy betty sandra
+margaret ashley kimberly emily donna michelle carol amanda melissa deborah
+stephanie dorothy rebecca sharon laura cynthia amy kathleen angela shirley
+brenda emma anna pamela nicole samantha katherine christine helen debra
+rachel carolyn janet maria catherine heather diane olivia julie joyce
+victoria ruth virginia lauren kelly christina joan evelyn judith andrea
+hannah megan cheryl jacqueline martha madison teresa gloria sara janice ann
+kathryn abigail sophia frances jean alice judy isabella julia grace amber
+denise danielle marilyn beverly charlotte natalie theresa diana brittany
+doris kayla alexis lori marie ava mia amelia harper ella chloe lily zoe leah
+aubrey addison layla scarlett aria riley nora hazel violet aurora savannah
+audrey brooklyn bella claire skylar lucy paisley everly caroline nova
+genesis emilia kennedy maya willow kinsley naomi aaliyah elena sadie ariana
+allison gabriella madelyn cora ruby eva serenity autumn adeline hailey
+gianna valentina isla eliana quinn nevaeh ivy piper lydia alexa josephine
+emery delilah vivian stella clara freya poppy daisy evie rosie phoebe millie
+florence matilda elsie imogen esme ellie holly jade katie kate jess becky
+liz beth kat jen jenny molly abby gemma hayley tilly nell iris ada edith
+mabel maisie lottie connie orla niamh siobhan aoife ciara saoirse juan jose
+luis miguel carlos jorge pedro manuel francisco antonio javier diego pablo
+mateo santiago sebastian nicolas alejandro fernando ricardo eduardo rafael
+andres sergio raul alberto roberto hector ruben emilio joaquin ignacio
+gonzalo cristian julio cesar marco tomas felipe gustavo rodrigo leonardo
+bruno thiago enzo matias benicio santino valentino maximo lorenzo agustin
+martina lucia valeria camila sofia daniela gabriela mariana fernanda paula
+natalia carolina alejandra ximena renata regina antonella catalina florencia
+agustina julieta luciana abril milagros rocio guadalupe carmen rosa ana
+beatriz ines pilar marta cristina raquel silvia monica veronica lorena
+adriana juliana leticia larissa bianca mikey jonny benny sammy nicky freddy
+izzy lizzy maddie addie kenzie mackenzie liv livvy allie ally gigi lulu coco
+jojo
+`)
+
+// commonFirstNames lists the most common first names and nicknames in English-speaking countries, for telling plain usernames like johnkevin (180).
+var commonFirstNames = strings.Fields(`
+james john robert michael william david richard joseph thomas charles
+christopher daniel matthew anthony mark donald steven paul andrew joshua
+kevin brian george timothy edward jason ryan jacob eric justin scott brandon
+benjamin samuel alexander frank patrick jack tyler aaron adam nathan henry
+zachary kyle noah liam oliver elijah lucas mason logan ethan aiden jayden
+luke owen dylan caleb isaac gabriel carter wyatt jackson levi hunter austin
+connor cameron evan jordan chase cole ian max leo jake josh mike matt chris
+nick alex sam ben dan tom joe will tony jim steve dave jose luis carlos juan
+mary patricia jennifer linda elizabeth barbara susan jessica sarah karen
+lisa nancy margaret ashley emily michelle amanda melissa stephanie rebecca
+laura amy angela emma anna nicole samantha katherine rachel heather maria
+olivia julia victoria hannah grace abigail madison chloe sophia isabella ava
+mia ella lily natalie zoe addison brooklyn avery aubrey leah hailey kayla
+alyssa lauren taylor megan brianna morgan destiny jasmine sydney kaitlyn
+alexis savannah riley allison ellie harper evelyn scarlett aria layla nora
+kate katie jenny beth becky abby maddie amber
+`)
+
+// commonLastNames lists the most common US last names (150).
+var commonLastNames = strings.Fields(`
 smith johnson williams brown jones garcia miller davis rodriguez martinez
 hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin
 lee perez thompson white harris sanchez clark ramirez lewis robinson walker
@@ -135,8 +210,13 @@ henderson barnes fisher vasquez simmons graham murray ford hamilton wallace
 shaw gordon burns kennedy griffin west cole hayes chapman ellis stevens
 tucker marshall owens harrison fernandez mcdonald woods washington palmer
 lawrence black mills grant knight rose stone hawkins dunn perkins hudson
-spencer gardner stephens payne pierce berry matthews arnold wagner willis
-ray watkins olson carroll duncan snyder hart cunningham bradley lane andrews
+spencer
+`)
+
+// rareLastNames lists less common last names from many countries (1377).
+var rareLastNames = strings.Fields(`
+gardner stephens payne pierce berry matthews arnold wagner willis ray
+watkins olson carroll duncan snyder hart cunningham bradley lane andrews
 harper fox riley armstrong carpenter weaver greene elliott sims austin
 peters kelley franklin lawson fields schmidt carr wheeler oliver montgomery
 richards williamson johnston banks meyer bishop mccoy howell morrison hansen
@@ -234,149 +314,41 @@ diallo traore coulibaly keita toure camara sow ndiaye diop fall oconnor
 byrne gallagher mcloughlin brennan macdonald mackenzie macleod fraser
 robertson paterson mclean mcgregor levi mizrahi peretz biton friedman
 shapiro katz goldberg rosenberg weiss papadopoulos georgiou nikolaou
-dimitriou papadakis konstantinou
-`)
-
-// gamingAdjectives lists adjectives gamers put in handles (178).
-var gamingAdjectives = strings.Fields(`
-silent dark bright crazy cosmic golden silver wild swift brave lucky sneaky
-mighty frosty stormy misty neon pixel cyber retro mystic lunar solar royal
-noble rapid savage fierce toxic frozen burning broken iron steel crystal
-scarlet crimson azure emerald amber ivory midnight twilight wicked brutal
-rogue tactical stealthy hungry electric atomic sonic turbo nitro hyper super
-mega ultra epic legendary mythic ancient eternal immortal infinite phantom
-chaotic deadly lethal vicious furious raging hidden secret lost fallen
-cursed blessed holy unholy dire grim venomous radiant blazing flaming icy
-stone obsidian cobalt chrome titanium quantum digital virtual binary glitchy
-stellar galactic astral arcane primal feral alpha omega sigma prime elite
-imperial masked hooded veiled wandering howling roaring soaring apex supreme
-ultimate dizzy lazy sleepy grumpy salty spicy cheesy crispy fluffy fuzzy
-tiny chill cool angry mad sly quick nimble clever cunning bold daring
-reckless fearless ruthless relentless restless tireless heartless nameless
-faceless endless shattered hollow rusty dusty bouncy funky jolly sour bitter
-shady humble gentle loud quiet frantic manic sinister vengeful valiant
-gallant loyal rabid feisty zesty sparky spooky creepy
-`)
-
-// gamingNouns lists nouns gamers put in handles: creatures, classes, weapons, space, weather, gems, food (382).
-var gamingNouns = strings.Fields(`
-wolf fox panda tiger dragon phoenix raven hawk falcon eagle owl bear lion
-shark viper cobra ninja samurai knight wizard ranger hunter pilot rider
-runner gamer coder storm thunder shadow star moon sun comet nova blade arrow
-shield crown ghost spirit soul reaper slayer seeker keeper walker breaker
-maker master lord king queen boss chief captain pirate outlaw bandit nomad
-drifter voyager explorer legend hero champion rebel sniper tank medic scout
-squad legion vortex nebula galaxy orbit rocket meteor laser plasma quasar
-glitch vector matrix circuit robot android cyborg titan giant golem hydra
-kraken ghoul demon wraith specter banshee valkyrie viking spartan gladiator
-warrior paladin berserker assassin mage sorcerer warlock necromancer druid
-shaman monk templar crusader sentinel guardian warden archer gunner striker
-raider marauder invader predator stalker tracker trapper prowler lurker
-beast monster fiend brute behemoth leviathan colossus juggernaut wyvern
-basilisk chimera manticore minotaur cerberus pegasus unicorn sphinx kitsune
-yeti mammoth rhino gorilla panther jaguar lynx cheetah leopard cougar
-mustang stallion bull bison buffalo moose stag elk wolverine badger otter
-ferret weasel hornet wasp scorpion mantis spider tarantula beetle condor
-vulture osprey kestrel crow magpie serpent snake python anaconda mamba croc
-gator raptor rex dino blizzard tornado hurricane typhoon cyclone tempest
-thunderbolt lightning flash spark ember blaze inferno flame fire frost ice
-glacier avalanche quake tremor tsunami volcano magma lava smoke mist fog
-haze dusk dawn eclipse zenith horizon abyss void chasm rift nexus core pulse
-surge shock static signal echo cipher code byte bit node kernel sword saber
-katana dagger spear axe hammer mace scythe bullet rifle cannon missile armor
-helm throne empire kingdom realm dominion citadel fortress bastion tower
-castle bishop rook pawn ace joker spade diamond sapphire topaz opal pearl
-quartz garnet mercury venus mars jupiter saturn neptune pluto orion sirius
-pulsar asteroid satellite shuttle maverick jet racer engine piston gear mech
-bot droid drone potato pickle waffle pancake bagel donut burrito nacho
-biscuit taco pizza noodle cookie muffin mango peach cherry berry honey
-coffee penguin koala bunny kitten puppy turtle dolphin whale octopus hamster
-llama sloth narwhal walrus goose duck chicken frog toad lizard gecko squid
-monkey cheese bean nugget burger bacon pepper pug cow pig hippo shrimp toast
-noob meme doge cat dog fish bird chip candy sugar spice juice soda milk rice
-pasta ramen sushi mochi
-`)
-
-// gamingTitles lists titles gamers put before a noun: SirWaffle, LordVortex (16).
-var gamingTitles = strings.Fields(`
-sir lord captain mr dr king queen prince baron duke general major agent
-professor doctor chief
-`)
-
-// channelSuffixes lists streaming and channel suffixes: NovaTV, PixelYT (8).
-var channelSuffixes = strings.Fields(`
-TV YT TTV Live HD Plays GG Pro
-`)
-
-// socialWords lists words social media handles are made of: lunar.dreams, velvet_rose (245).
-var socialWords = strings.Fields(`
-angel aura blossom bloom bunny butterfly candy cherry cloud cotton daisy
-dream dreamy fairy flower glitter glow heart honey kitty lavender lily love
-lovely luna magic melody mint moon moonlight peach pearl petal pixie rose
-sakura sky soft sparkle star sugar sunflower sunny sweet velvet vibes violet
-wish golden latte matcha boba mocha vanilla caramel cocoa berry strawberry
-blueberry lemon mango coconut papaya kiwi cupcake cookie cinnamon
-marshmallow bubble bubbles sprinkle rainbow sunshine sunset sunrise ocean
-wave waves sea shell coral lagoon island beach breeze meadow garden forest
-fern ivy willow maple pine cedar moss river lake rain snow snowflake winter
-summer autumn spring daydream wanderer wanderlust nomad soul spirit serene
-calm cozy comfy chill mellow gentle quiet shy sleepy lazy cute pretty tiny
-little mini muse poet poetry verse lyric song tune vinyl cassette polaroid
-film camera lens canvas paint sketch doodle ink paper book novel story tea
-chai croissant brunch toast cat kitten puppy pup fox deer fawn koala otter
-panda bee ladybug dove swan owl moth firefly jellyfish starfish seahorse
-dolphin whale turtle crystal gem jewel diamond opal moonstone stardust
-cosmos galaxy nebula planet orbit comet venus celestial ethereal mystic
-witch spell charm lucky clover rosy dewy misty foggy hazy dusty vintage
-retro indie grunge punk goth pastel neon glossy silk satin lace linen denim
-wild free happy lunar solar dreams stars clouds roses petals daisies hearts
-angels skies moons blooms flowers wishes dreamer stargazer moonchild
-sunkissed daydreamer honeybee wildflower bluebell buttercup
-`)
-
-// hobbies lists hobbies and trades people add to their names: sarahbakes, mike.codes (67).
-var hobbies = strings.Fields(`
-gaming games gamer playz plays anime live yt tv dance clips codes draws art
-music beats bakes cooks travels reads writes lifts runs fit photo films
-vlogs world zone hub life vibes daily official design designs studio creates
-makes builds dev dances sings paints eats style fashion beauty makeup nails
-fitness yoga rides skates surfs hikes climbs knits crafts garden plants
-books tech tunes mixes edits shoots
-`)
-
-// socialPrefixes lists words people put before their names: mr.tobias, lil_zara, iamnoah (17).
-var socialPrefixes = strings.Fields(`
-mr mrs miss ms lil little big not my get iam its im the just real hey
-`)
-
-// nameSuffixes lists words people put after their names: leoboi, emmagirl (8).
-var nameSuffixes = strings.Fields(`
-boi boy girl man kid dude bro guy
-`)
-
-// relationWords lists family words in handles: noahsmama, daddy.omar (7).
-var relationWords = strings.Fields(`
-mom mum mama mommy dad daddy papa
-`)
-
-// funWords lists slang and exclamations in handles: yeet.lucas, zara.hello (19).
-var funWords = strings.Fields(`
-yeet oof lol idk bruh yolo hello hey meme epic cool boss legend vibe chill
-lit hype wow omg
-`)
-
-// webSuffixes lists file and web endings on handles: lopez.io, nina.exe (8).
-var webSuffixes = strings.Fields(`
-com io co exe png www lol jpg
-`)
-
-// gamingPrefixes lists words gamers put before a word: mrwaffle, lilpanda, supertaco (12).
-var gamingPrefixes = strings.Fields(`
-mr lil little big super epic the its my not mega ultra
-`)
-
-// gamingSuffixes lists words gamers put after a word: tacoman, pandagirl, leoplayz (19).
-var gamingSuffixes = strings.Fields(`
-boi boy girl man gamer games playz plays pro king queen xx xd yt tv hd dude
-bro master
+dimitriou papadakis konstantinou ashby ashworth atwood bancroft barlow
+barnaby beckett belcher benning berkley blackwood blakely bramley brannon
+bristow calloway carver cassidy chadwick channing chapple colby conway
+corbett crowder crowley dalton danvers darby delaney dempsey denholm devlin
+dorsey drummond dudley dunbar dunmore eastwood ellery ellison everly fairley
+farrow fenwick finch fitch flint forde foxworth gable galloway garland
+garrity gentry goddard goodall gorman granger greaves hadley halsey hammett
+hanley harding harlow hartley haskell hatfield hawley hayward heller hendry
+hensley hobbs holbrook hollis hopper horne howland hurley hutchins ingalls
+irving jarvis jeffries kearney keating kendrick kenney kershaw kimball
+kinsey kirby knox lacey langley larkin latham layton leland lester linden
+lockwood lowry lyle macaulay maddox malloy marlow marston mayfield
+mcallister mccabe mccall mcgrath mckee mcnally merritt milburn millard
+monroe mosley mulligan norwood oakley ogden osgood oswald paget parrish
+paxton pemberton penrose percy pickett platt prescott pritchard quigley
+radford ramsay rawlings redding renfro rigby ripley rooney rourke rowley
+rutledge sadler sampson sawyer seaton sexton shelby sheridan shipley
+sinclair slater somers spalding stafford stoddard stroud sutherland talbot
+tanner tatum templeton thorne tilley toomey trask truman tully upton vance
+vickers wakefield waldron warwick weatherby wendell wexler whitaker whitley
+wilcox winslow wolcott woodard wren yardley yoder arsenault beaulieu
+belanger bouchard boucher cloutier desjardins gagnon giroux lachance lalonde
+leblanc lemieux levesque pelletier poirier savard thibault tremblay vachon
+ouellette paquette fortin cormier theriault lavoie gosselin bergeron
+albrecht baumann bergmann brandt eckert engel gerber haas hahn holtz kessler
+kraft kuhn lorenz mayer metzger pfeiffer reinhardt schafer schilling seidel
+vogel voss winkler ziegler brenner fuchs lindner bonanno capello napoli
+tedesco valenti santangelo aguirre barrera bustos cardenas castaneda
+cervantes cisneros escobar espinoza galvan ibarra leyva macias mejia montoya
+navarrete ochoa olvera orozco pacheco palacios quintero rangel robles
+salinas sepulveda solis tapia trevino urbina valencia villarreal zamora
+zavala arellano beltran cordero bergstrom dahl ekman engstrom falk hagen
+lindgren lundqvist nygaard sandberg sjoberg strand wahl popescu radu stanek
+kovacs szabo nagy toth varga callahan carney cleary connolly costello cullen
+donnelly egan fahey finnegan flanagan flynn hanlon hennessy kavanagh keane
+kinsella mahoney mcnamara molloy moriarty mullen nagle phelan quinlan
+riordan scanlon sheehan tierney whelan
 `)

@@ -665,6 +665,10 @@ type GenerateOptions struct {
 	// AllowKnown permits returning names the model was trained on.
 	AllowKnown bool
 
+	// Keep, if non-nil, is asked about every name; names it rejects are
+	// not returned.
+	Keep func(name string) bool
+
 	// Progress, if non-nil, is called with the number of names found so far
 	// each time one is found.
 	Progress func(found int)
@@ -707,7 +711,7 @@ func (m *Model) Generate(rng *rand.Rand, n int, opts GenerateOptions) ([]string,
 		if _, dup := produced[h]; dup {
 			continue
 		}
-		if (!opts.AllowKnown && m.seen.has(h)) || Check(name) != nil || !m.NameWordsLike(name) {
+		if (!opts.AllowKnown && m.seen.has(h)) || Check(name) != nil || !m.NameWordsLike(name) || opts.Keep != nil && !opts.Keep(name) {
 			continue
 		}
 		produced[h] = struct{}{}

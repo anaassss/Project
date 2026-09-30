@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/anaassss/Project/knowledge"
 	"github.com/anaassss/Project/markov"
 )
 
@@ -48,7 +49,7 @@ func rng() *rand.Rand { return rand.New(rand.NewPCG(1, 2)) }
 
 func TestEditProducesGoodDistinctEdits(t *testing.T) {
 	e := editor(t, Options{Max: 10})
-	for _, name := range []string{"ShadowFox", "DarkWolf_7", "xXSniperXx", "StormHawk99"} {
+	for _, name := range []string{"ShadowFox", "DarkWolf_7", "xXGhostXx", "StormHawk99"} {
 		edits := e.Edit(rng(), name, nil)
 		if len(edits) == 0 {
 			t.Errorf("Edit(%q) returned nothing", name)
@@ -87,7 +88,7 @@ func TestEditUsesLearnedParts(t *testing.T) {
 	edits := e.Edit(rng(), "ShadowFox", nil)
 	swapped := slices.ContainsFunc(edits, func(ed string) bool {
 		rest, ok := strings.CutPrefix(ed, "Shadow")
-		return ok && slices.Contains(e.sources[0].words, strings.ToLower(rest))
+		return ok && slices.Contains(e.sources[0].words[1], strings.ToLower(rest))
 	})
 	if !swapped {
 		t.Errorf("Edit(ShadowFox) = %v, want a learned word swapped in", edits)
@@ -299,10 +300,10 @@ func TestEditEverything(t *testing.T) {
 	// and every word that usually comes later into the second.
 	src := e.sources[0]
 	var want []string
-	for _, w := range src.leads {
+	for _, w := range src.leads[1] {
 		want = append(want, strings.ToUpper(w[:1])+w[1:]+"Fox")
 	}
-	for _, w := range src.tails {
+	for _, w := range src.tails[1] {
 		want = append(want, "Shadow"+strings.ToUpper(w[:1])+w[1:])
 	}
 	for _, cand := range want {
@@ -390,6 +391,47 @@ func TestNumberSwapsKeepShape(t *testing.T) {
 			if num[0] != '0' && got[0] == '0' {
 				t.Errorf("numberLike(%q) = %q starts with 0", num, got)
 			}
+		}
+	}
+}
+
+func TestUndecorate(t *testing.T) {
+	for name, want := range map[string]string{
+		"its.Mike_99": "mike_99", "xXShadowXx": "shadow", "x.luna.x": "luna",
+		"mike.and.jess": "mike.jess", "noahplayz2004": "noah2004", "Dark_Wolf": "dark_wolf",
+		"lil_zara.yt": "zara", "maria.garcia": "maria.garcia",
+	} {
+		var b strings.Builder
+		for _, seg := range undecorate(markov.Split(name)) {
+			b.WriteString(seg.Text)
+		}
+		if b.String() != want {
+			t.Errorf("undecorate(%q) = %q, want %q", name, b.String(), want)
+		}
+	}
+}
+
+func TestEditUnique(t *testing.T) {
+	e := editor(t, Options{Max: 20, Unique: true})
+	for _, name := range []string{"xXShadowWolfXx", "its.DarkKnight", "NightHawk_yt", "IronWolf42"} {
+		edits := e.Edit(rng(), name, nil)
+		if len(edits) == 0 {
+			t.Errorf("Edit(%q) returned nothing", name)
+		}
+		for _, ed := range edits {
+			if ed != strings.ToLower(ed) || !knowledge.Unique(ed) {
+				t.Errorf("edit %q of %q isn't lowercase and Unique", ed, name)
+			}
+		}
+	}
+	// The name without its decorations comes first.
+	if edits := e.Edit(rng(), "xXShadowFoxXx", nil); len(edits) == 0 || edits[0] != "shadowfox" {
+		t.Errorf("first edit of xXShadowFoxXx = %v, want shadowfox first", edits)
+	}
+	// Dropping the number would leave a plain name.
+	for _, ed := range e.Edit(rng(), "john.smith92", nil) {
+		if ed == "john.smith" {
+			t.Error("Edit(john.smith92) gave the plain john.smith")
 		}
 	}
 }

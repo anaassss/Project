@@ -9,8 +9,8 @@
 //   - drop a number (MysticPanda99 → MysticPanda)
 //
 // With several models, each username is edited with the ones that know its
-// words best, so an email-style name is edited with email knowledge and a
-// gaming name with gaming knowledge. A model only writes from patterns it
+// words best. With Options.Unique, every edit also looks like a real but
+// uncommon email-style username (knowledge.Unique). A model only writes from patterns it
 // has actually seen, any new word it writes must be made of words it learned
 // (markov.Model.WordLike), and every edit must pass markov.Check. A username
 // gets fewer edits when the models know less that fits it. Run edits
@@ -30,6 +30,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/anaassss/Project/knowledge"
 	"github.com/anaassss/Project/markov"
 )
 
@@ -62,6 +63,12 @@ type Options struct {
 	// MinLen and MaxLen bound every edit's length in characters. Zero means
 	// markov.MinNameLen and markov.MaxNameLen, the garbage filter's limits.
 	MinLen, MaxLen int
+
+	// Unique makes every edit look like a real email-style username that
+	// isn't taken already: lowercase, with no decorations like its, lil,
+	// xX…Xx, playz or .io (taken off each username before it is edited),
+	// and not plain like johnkevin (see knowledge.Unique).
+	Unique bool
 }
 
 // Editor edits usernames with one or more models. It is safe for concurrent
@@ -73,11 +80,14 @@ type Editor struct {
 
 // source is one model and the vocabulary swapped in from it.
 type source struct {
-	m       *markov.Model
-	words   []string // learned words, lowercased, most common first
-	leads   []string // those that can start a name: dark, john
-	tails   []string // those that can come later: wolf, smith
-	numbers []string // learned numbers, most common first
+	m *markov.Model
+	// Learned words, lowercased, most common first, each split by length:
+	// [0] holds initials (1-2 letters), [1] longer words, so a word is only
+	// swapped for one like it.
+	words   [2][]string
+	leads   [2][]string // those that can start a name: dark, john
+	tails   [2][]string // those that can come later: wolf, smith, jb
+	numbers []string    // learned numbers, most common first
 
 	// byShape groups numbers by numberShape, so a number is swapped for one
 	// like it: a year for a year, 4137 for another random 4-digit number.
@@ -130,16 +140,25 @@ func newSource(m *markov.Model) source {
 		if markov.IsAffix(w) {
 			continue // affixes frame names; they aren't swapped in
 		}
-		src.words = append(src.words, w)
+		c := class(w)
+		src.words[c] = append(src.words[c], w)
 		lead, follow := m.Positions(w)
 		if lead {
-			src.leads = append(src.leads, w)
+			src.leads[c] = append(src.leads[c], w)
 		}
 		if follow {
-			src.tails = append(src.tails, w)
+			src.tails[c] = append(src.tails[c], w)
 		}
 	}
 	return src
+}
+
+// class is 0 for initials (words of 1-2 letters) and 1 for longer words.
+func class(w string) int {
+	if utf8.RuneCountInString(w) <= 2 {
+		return 0
+	}
+	return 1
 }
 
 // New prepares an Editor from the models that have learned something. It
@@ -258,6 +277,40 @@ func (e *Editor) splitJoined(segs []markov.Segment) []markov.Segment {
 // where one starts another ("mrs" before "mr").
 var leadingAffixes = []string{"official", "real", "just", "miss", "mrs", "its", "the", "iam", "hey", "not", "lil", "get", "mr", "ms", "im", "my"}
 
+// undecorate takes decorations (knowledge.Decoration, knowledge.TrimJoined)
+// and x wrappers off segs, lowercases them, and tidies the separators left
+// behind: its.Mike_99 → mike_99, xXShadowXx → shadow, noahplayz → noah.
+func undecorate(segs []markov.Segment) []markov.Segment {
+	isX := func(seg markov.Segment) bool {
+		return seg.Kind == markov.Separator || seg.Kind == markov.Word && strings.EqualFold(seg.Text, "x")
+	}
+	start, end := 0, len(segs)
+	for start < end && isX(segs[start]) {
+		start++
+	}
+	for end > start && isX(segs[end-1]) {
+		end--
+	}
+	var out []markov.Segment
+	for _, seg := range segs[start:end] {
+		switch seg.Kind {
+		case markov.Word:
+			if seg.Text = knowledge.TrimJoined(seg.Text); knowledge.Decoration(seg.Text) {
+				continue
+			}
+		case markov.Separator:
+			if len(out) == 0 || out[len(out)-1].Kind == markov.Separator {
+				continue
+			}
+		}
+		out = append(out, seg)
+	}
+	if len(out) > 0 && out[len(out)-1].Kind == markov.Separator {
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
 func isASCII(s string) bool {
 	for i := range len(s) {
 		if s[i] >= utf8.RuneSelf {
@@ -312,6 +365,13 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 		if seen.has(h) || (!e.opts.AllowKnown && slices.ContainsFunc(e.sources, func(s source) bool { return s.m.KnowsHash(h) })) {
 			return
 		}
+		if e.opts.Unique {
+			// Before lowercasing, which would hide the TV in NovaTV.
+			if !knowledge.Unique(cand) {
+				return
+			}
+			cand = strings.ToLower(cand)
+		}
 		if markov.Check(cand) != nil {
 			return
 		}
@@ -320,10 +380,27 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 	}
 
 	segs := e.splitJoined(markov.Split(name))
-	// Swappable parts are numbers and words of 2+ letters other than affixes
-	// (xX, The, its), which are kept. The first such word is the lead: it is
-	// swapped for words that usually start names, later ones for words that
-	// usually come later, so john.smith doesn't become john.priya.
+	if e.opts.Unique {
+		// Edit the name without its decorations, which is itself an edit.
+		segs = undecorate(segs)
+		var b strings.Builder
+		for _, seg := range segs {
+			b.WriteString(seg.Text)
+		}
+		if b.String() != name {
+			name = b.String()
+			add(name)
+		}
+		if name == "" {
+			return dst
+		}
+	}
+	// Swappable parts are numbers and learned words of 2+ letters other than
+	// affixes (xX, The, its). Affixes are kept, and so are words no model
+	// learned, like nicknames (jusgo in jusgo2004), which are what make a
+	// name its own. The first word is the lead: it is swapped for words that
+	// usually start names, later ones for words that usually come later, so
+	// john.smith doesn't become john.priya.
 	var swappable []int
 	styles := make([]caseStyle, len(segs))
 	lead := -1
@@ -336,10 +413,12 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 		case seg.Kind == markov.Word:
 			parts++
 			if utf8.RuneCountInString(seg.Text) >= 2 && !markov.IsAffix(seg.Text) {
-				swappable = append(swappable, i)
-				styles[i] = styleOf(seg.Text)
 				if lead < 0 {
 					lead = i
+				}
+				if slices.ContainsFunc(e.sources, func(s source) bool { return s.m.HasWord(seg.Text) }) {
+					swappable = append(swappable, i)
+					styles[i] = styleOf(seg.Text)
 				}
 			}
 		}
@@ -399,12 +478,15 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 				return same
 			}
 			return src.numbers
-		case i == lead && len(src.leads) > 0:
-			return src.leads
-		case i != lead && len(src.tails) > 0:
-			return src.tails
 		}
-		return src.words
+		c := class(segs[i].Text)
+		switch {
+		case i == lead && len(src.leads[c]) > 0:
+			return src.leads[c]
+		case i != lead && len(src.tails[c]) > 0:
+			return src.tails[c]
+		}
+		return src.words[c]
 	}
 
 	sources := e.fitting(segs)

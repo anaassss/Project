@@ -200,7 +200,7 @@ func (s *session) edit() error {
 	if err != nil {
 		return err
 	}
-	opts := edit.Options{Max: perName, AllowKnown: s.cfg.AllowKnown, MinLen: minLen, MaxLen: maxLen}
+	opts := edit.Options{Max: perName, AllowKnown: s.cfg.AllowKnown, MinLen: minLen, MaxLen: maxLen, Unique: s.cfg.Unique}
 	summary, err := editFile(models, path, opts, s.cfg.Seed, ".", s.out)
 	if err != nil {
 		return err
@@ -300,7 +300,7 @@ func (s *session) generate() error {
 		Temperature: c.GenTemp,
 		Order:       c.GenOrder,
 		AllowKnown:  c.AllowKnown,
-	}, orRandom(c.Seed), func(found int) { p.done.Store(int64(found)) })
+	}, c.Unique, orRandom(c.Seed), func(found int) { p.done.Store(int64(found)) })
 	elapsed := p.end(err == nil)
 	if err != nil {
 		return err

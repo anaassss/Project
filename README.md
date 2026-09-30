@@ -5,8 +5,14 @@ using two kinds of knowledge:
 
 - **Own knowledge**, which you teach it by training on your own lists of
   usernames.
-- **Claude knowledge**, built in: how real email-style and social/gaming
-  usernames are made. It is always there, and never mixes with yours.
+- **Claude knowledge**, built in: how real email-style usernames are made,
+  the kind people end up with once `john.smith` is long taken. It is always
+  there, and never mixes with yours.
+
+Every edit looks like a real username that is likely still free: lowercase,
+with no decorations like `its`, `lil`, `xX…Xx`, `playz` or `.io`, and never
+as plain as `johnkevin` or `emma2008`. That holds whichever knowledge you
+edit with (see [Unique email style](#unique-email-style)).
 
 It handles millions of usernames in seconds by using every CPU core.
 
@@ -24,8 +30,8 @@ go build -o usergen .
   6 - Clear own knowledge
   0 - Exit
 > 2
-Shortest length (3-24) [3]: 6
-Longest length (6-24) [24]: 14
+Shortest length (3-24) [3]: 8
+Longest length (8-24) [24]: 14
 Which knowledge?
   1 - Own
   2 - Claude
@@ -34,13 +40,15 @@ Choose 1-3 [3]: 2
 Edits per username (1-1000, or max) [10]: 4
 File: mine.txt
 Editing  [██████████████████████████████] 100%
-Saved 21 edited usernames (6-14 characters) to edited_21.txt in 71ms
+Saved 20 edited usernames (8-14 characters) to edited_20.txt in 54ms
 ```
 
-`mine.txt` held `john.smith`, `maria.garcia92`, `jsmith`, `SilentWolf`,
-`itsmike` and `xXShadowXx`; `edited_21.txt` holds `samantha.smith`,
-`john.mariam`, `amber.garcia92`, `maria.garcia82`, `jsmith100`,
-`SilentTurtle`, `HolyWolf`, `itsbecky`, `itslorenzo`, `xXMooseXx` and so on.
+`mine.txt` held `maria.garcia92`, `tobiaslindqvist`, `itsnoah2004`,
+`xXShadowXx`, `kevin.hollis` and `dariwex07`; `edited_20.txt` holds
+`kayla.garcia92`, `maria.garcia76`, `tobiasgentry`, `thanhlindqvist`,
+`philip2004`, `abril2004`, `kevin.goddard`, `ayesha.hollis`, `dariwex96`,
+`dariwex1608` and so on. `itsnoah2004` lost its `its` (and `noah2004` alone is
+too plain to keep); `xXShadowXx` became `shadow`, too short for 8-14.
 
 1. **Training** learns from a file of usernames (one per line) into your own
    knowledge, saved in `usergen.model`. Each run adds to it rather than
@@ -64,48 +72,57 @@ result.
 
 ## Claude knowledge
 
-Rather than a list of anyone's real accounts, it is the patterns real
-usernames follow, tuned to how everyday accounts look: almost all lowercase,
-half with a number (a birth year, a 2-4 digit number, a date, or a favourite
-like `123` or `007`), and names run together, dotted or cut short more often
-than a plain `firstname.lastname`. The patterns are filled from:
+Rather than a list of anyone's real accounts, it is the patterns that real,
+still-free email-style usernames follow, measured on a sample of them and
+keeping every shape that made up at least 5% of it:
 
-- about 1,250 first names and nicknames and 1,180 last names from the US and
-  UK, Latin America, Europe, the Nordics, Eastern Europe, the Arab world,
-  Turkey, Iran, South Asia, East and Southeast Asia, and Africa;
-- 180 adjectives and 380 nouns gamers use (creatures, animals, classes,
-  weapons, space, weather, gems, food), with the prefixes and endings they
-  add (`lil`, `mr`, `epic`, `gamer`, `playz`, `pro`, `yt`, `xd`);
-- 245 words social handles are made of, 67 hobbies, what people put before
-  their names (`its`, `iam`, `mr`, `miss`, `lil`), family words (`mom`,
-  `mama`, `dad`), and endings like `.io`, `.png` and `.exe`.
+| Share | Shape | Examples |
+|------:|-------|----------|
+| 26% | nicknames and blends of names, mostly with a number | `dariwex2006`, `brandy2011`, `tobiasski`, `kristofer91` |
+| 18% | a first name and a less common surname, run together, sometimes with a number, a digit or an initial between | `tobiaslindqvist`, `ivan7okafor`, `saragwinslow08` |
+| 18% | a first name and a less common surname with a dot, `_` or `-` | `maya.thorne`, `leo_quigley`, `nina.ashby` |
+| 10% | a first name and a 3-4 digit number or a date | `rosalind4318`, `tariq_0912` |
+| 10% | a first name and initials or a short surname | `yusuf.tk`, `greta.hol`, `omar.a.j` |
+| 9% | two first names | `amir.helena` |
+| 9% | a first name and a common surname, now and then with a number | `ines.carter`, `leo_hayes27` |
 
-Brand and game names and crude words are left out on purpose. To get
-usernames that use them, train your own knowledge on a list that does.
+Almost all are lowercase, half end in a number (a birth year, 2-4 digits, a
+date, or a favourite like `123` or `007`), and half have no separator.
+Prefixes and suffixes (`its`, `lil`, `mr`, `xX…Xx`, `playz`, `boi`, `mom`,
+`.io`) were under 5% of the sample and are left out, and so are brand and
+game names and crude words.
 
-It is learned from 100,000 usernames of each style, built in under a second
-when first needed:
-
-| Style | Patterns | Examples |
-|-------|----------|----------|
-| Email | first name + number, first.last, first name + part of a surname, first name + initials, initial + surname, surname + number, with birth years, dates or 2-4 digit numbers | `judy1981`, `monicatorres`, `jean.p1994`, `mchavez2004`, `ginevra.ro`, `tasnim_koski` |
-| Gaming | word + number, two words run together, word + gamer/playz/pro/xd, lil/mr/epic + word, word.word, word.exe; a few in CamelCase (AdjectiveNoun, TheNoun, xX…Xx) | `frog9241`, `noodlesorcerer`, `ramenplayz`, `lilfiend8690`, `fire.storm`, `TheSerpent` |
-| Social | name + hobby, its/iam/mr/miss + name, name + mama/dad/kid, name + word, name.io, name + xd, ilike + food, name.and.name | `felix.designs2010`, `mr.colton`, `evansmama07`, `mint.priya`, `hanaxd`, `fitness.rizky` |
-
-You don't choose a style: each username is edited with whichever knowledge
-knows its words best, so `john.smith` gets email-style edits and
-`SilentWolf` gets gaming ones. With **Both**, your own knowledge joins in on
-the same terms.
+The names come from about 1,250 first names and nicknames (more often ones
+common in English- and Spanish-speaking countries), 150 common and 1,380
+less common last names from many countries. The knowledge is learned from
+200,000 usernames built this way, in under a second when first needed.
 
 ```
 > 4
 Own knowledge
   Nothing learned yet. Choose 1 - Training to teach it.
 Claude knowledge (built in)
-  Email-style  99,007 usernames, 4,648 words; most common: levi, ren, leon, oliver, kelly, graham
-  Gaming       91,730 usernames, 584 words; most common: captain, chief, king, lord, queen, live
-  Social       93,122 usernames, 1,606 words; most common: mommy, daddy, mum, papa, dad, mama
+  Email-style  198,419 usernames, 8,714 words; most common: hudson, russell, kennedy, grant, james, thomas
 ```
+
+## Unique email style
+
+Plain usernames are almost all taken, and decorated ones look like gamer
+tags. So while **Unique email style** is on (it is by default), everything
+Edit and Generate make, from either knowledge:
+
+- is lowercase;
+- has no decorations: they are taken off each username before it is edited
+  (`its.Mike_99` → `mike_99`, `xXShadowXx` → `shadow`, `noahplayz` → `noah`),
+  and edits that would have them are dropped;
+- is not plain: not a name on its own (`stefan`), not a very common name
+  with a birth year or up to two digits (`emma2008`, `john92`), and not two
+  very common names or an initial and one (`johnkevin`, `john.smith`,
+  `jsmith`).
+
+Uncommon names pass (`kevin.hollis`, `jason4471`), so your own knowledge
+still edits in its own style, just without decorations or plain results.
+Turn it off in Settings, or with `-unique=false`, to edit any style.
 
 ## Settings
 
@@ -132,10 +149,11 @@ Settings (saved in usergen.settings.json)
    11  Context length (0 = the model's)               0
   Edit and Generate
    12  Knowledge (own, claude or both)                both
-   13  Allow usernames the knowledge learned from     off
-   14  Seed (0 = random each time)                    0
+   13  Unique email style (no plain or decorated)     on
+   14  Allow usernames the knowledge learned from     off
+   15  Seed (0 = random each time)                    0
   Own knowledge
-   15  File                                           usergen.model
+   16  File                                           usergen.model
     0  Back
 ```
 
@@ -155,10 +173,12 @@ Measured on a 4-core machine; more cores are faster.
 
 | Task | Input | Time |
 |------|-------|------|
-| Training | 2,000,000 lines | 1.8 s |
-| Edit, own knowledge | 1,000,000 usernames → 6.1M edits | 7.5 s |
-| Edit, Claude knowledge | 1,000,000 usernames → 6.0M edits | 7.9 s |
-| Edit, both | 1,000,000 usernames → 6.4M edits | 9.8 s |
+| Training | 2,000,000 lines | 2.0 s |
+| Edit, own knowledge | 1,000,000 usernames → 5.5M edits | 9.7 s |
+| Edit, Claude knowledge | 1,000,000 usernames → 5.2M edits | 8.3 s |
+| Edit, both | 1,000,000 usernames → 5.7M edits | 10.6 s |
+
+With Unique email style off, editing takes about 30% less time.
 
 Training checks and deduplicates names in file order, then counts patterns on
 every core. Editing splits the input across every core and writes results in
@@ -172,10 +192,10 @@ Each username is split into words, numbers and separators
 
 | Edit | Example |
 |------|---------|
-| swap a word or number for one learned from other usernames | `ShadowFox` → `SolarFox` |
-| keep the leading words and let the model write the rest | `ShadowFox` → `ShadowWalker` |
-| let the model add up to 4 characters to the end | `DarkKnight_7` → `DarkKnight_77` |
-| drop a number | `MysticPanda99` → `MysticPanda` |
+| swap a word or number for one learned from other usernames | `maria.garcia92` → `kayla.garcia92` |
+| keep the leading words and let the model write the rest | `kevin.hollis` → `kevin.lorenzo` |
+| let the model add up to 4 characters to the end | `maria.garcia92` → `maria.garcia928` |
+| drop a number | `samforest2004` → `samforest` |
 
 When the model writes characters, it only continues from patterns it has
 actually seen, and never guesses from less context. Every new word it writes
@@ -193,16 +213,20 @@ goes: whether it starts names (`dark`, `john`) or comes later (`wolf`,
 `smith`). Swaps put words only where they belong, so `john.smith` becomes
 `john.washington` or `samir.smith`, never `john.priya` or `WolfFox`.
 Wrappers like `xX…Xx`, `The` and `its` stay in place and are never swapped
-in.
+in (with Unique email style on, they are taken off instead).
+
+Only words the knowledge learned are swapped, each for one like it: a name
+for a name, initials for initials (`yusuf.tk` → `yusuf.jb`). Words it doesn't
+know, like the made-up `dariwex` in `dariwex07`, are kept, since they are what
+make a name its own; the number changes instead (`dariwex96`).
 
 Lowercase names that run words together are split where a learned word
-ends (`samforest2004` → `sam` `forest` `2004`, `itsnoah` → `its` `noah`),
-so each part can be swapped and the edit stays joined: `aymanforest2004`,
-`itsgregory`. The first part must be a word that starts names, so names the
-knowledge doesn't know, like `warren`, are never cut into fragments. Numbers
-are swapped for numbers of the same shape: a year for a year
-(`samforest2012`), three digits for three digits (`wolfpanda975` →
-`wolfpanda123`).
+ends (`tobiaslindqvist` → `tobias` `lindqvist`), so each part can be swapped
+and the edit stays joined: `tobiasgentry`, `thanhlindqvist`. The first part
+must be a word that starts names, so names the knowledge doesn't know, like
+`warren`, are never cut into fragments. Numbers are swapped for numbers of
+the same shape: a year for a year, two digits for two (`dariwex07` →
+`dariwex96`).
 
 The saved file has one username per line with no duplicates. It leaves out
 the usernames you gave it and names any knowledge in use learned from. It is never
@@ -240,6 +264,7 @@ terminal.
 ./usergen edit mine.txt                     # both knowledges, 10 edits each
 ./usergen edit -knowledge claude -edits max mine.txt
 ./usergen edit -min 8 -max 12 -edits 5 -seed 42 mine.txt
+./usergen edit -unique=false mine.txt       # any style, decorations kept
 ./usergen generate -n 20 -knowledge claude  # brand-new usernames from scratch
 ./usergen stats                             # your own knowledge
 ```
@@ -255,6 +280,7 @@ terminal.
 | `-min`, `-max` | edit | shortest and longest edit in characters (default 3-24) |
 | `-seed` | edit, generate | fixed seed for repeatable output (0 = random) |
 | `-allow-known` | edit, generate | allow names the knowledge learned from |
+| `-unique` | edit, generate | only lowercase email-style names, without decorations or plain names (default `true`) |
 | `-n`, `-min`, `-max`, `-temp`, `-order` | generate | count, shortest and longest length, creativity, context |
 
 ## Own knowledge file

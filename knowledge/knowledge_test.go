@@ -6,15 +6,15 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/anaassss/Project/markov"
 )
 
 func TestListsHaveNoDuplicates(t *testing.T) {
 	for name, list := range map[string][]string{
-		"firstNames": firstNames, "lastNames": lastNames, "gamingAdjectives": gamingAdjectives,
-		"gamingNouns": gamingNouns, "gamingTitles": gamingTitles, "channelSuffixes": channelSuffixes,
-		"socialWords": socialWords, "hobbies": hobbies, "socialPrefixes": socialPrefixes,
+		"firstNames": firstNames, "commonFirstNames": commonFirstNames,
+		"commonLastNames": commonLastNames, "rareLastNames": rareLastNames,
 	} {
 		seen := map[string]bool{}
 		for _, w := range list {
@@ -24,122 +24,153 @@ func TestListsHaveNoDuplicates(t *testing.T) {
 			seen[w] = true
 		}
 	}
-}
-
-func TestUsernamesPassCheck(t *testing.T) {
-	r := rand.New(rand.NewPCG(1, 1))
-	for _, s := range Styles {
-		for range 30000 {
-			if name := Username(r, s); markov.Check(name) != nil {
-				t.Fatalf("%s username %q fails Check: %v", s, name, markov.Check(name))
-			}
+	for _, w := range rareLastNames {
+		if slices.Contains(commonLastNames, w) {
+			t.Errorf("%q is both a common and a rare last name", w)
 		}
 	}
 }
 
-// TestPatternsRarelyFail makes sure no pattern mostly builds garbage that
-// Username would silently retry.
+func TestUsernamesLookLikeTheKnowledge(t *testing.T) {
+	r := rand.New(rand.NewPCG(1, 1))
+	for range 30000 {
+		name := Username(r)
+		if err := markov.Check(name); err != nil {
+			t.Fatalf("username %q fails Check: %v", name, err)
+		}
+		if name != strings.ToLower(name) {
+			t.Fatalf("username %q is not lowercase", name)
+		}
+		if !Unique(name) {
+			t.Fatalf("username %q is not Unique", name)
+		}
+	}
+}
+
+// TestPatternsRarelyFail makes sure no pattern mostly builds names that
+// Username would silently retry: garbage, or names that aren't Unique,
+// which a pattern of common names (thomas.hughes) builds on purpose now
+// and then.
 func TestPatternsRarelyFail(t *testing.T) {
 	r := rand.New(rand.NewPCG(4, 4))
-	for _, s := range Styles {
-		for i, p := range patternsFor(s) {
-			failed := 0
-			for range 2000 {
-				if markov.Check(p.build(r)) != nil {
-					failed++
-				}
+	for i, p := range patterns {
+		garbage, plain := 0, 0
+		for range 2000 {
+			name := p.build(r)
+			switch {
+			case markov.Check(name) != nil:
+				garbage++
+			case !Unique(name):
+				plain++
 			}
-			if failed > 100 {
-				t.Errorf("%s pattern %d fails the garbage filter %d times in 2000", s, i, failed)
-			}
+		}
+		if garbage > 100 || plain > 500 {
+			t.Errorf("pattern %d builds %d garbage and %d plain usernames in 2000", i, garbage, plain)
 		}
 	}
 }
 
-func TestEmailStyleIsBuiltFromNames(t *testing.T) {
-	r := rand.New(rand.NewPCG(2, 2))
-	withName := 0
-	for range 1000 {
-		name := Username(r, Email)
-		if name != strings.ToLower(name) {
-			t.Errorf("email-style %q is not lowercase", name)
+// TestShape checks the proportions the patterns are weighted to give.
+func TestShape(t *testing.T) {
+	r := rand.New(rand.NewPCG(3, 3))
+	const n = 10000
+	var digits, joined, dotted, withName int
+	for range n {
+		name := Username(r)
+		if strings.ContainsFunc(name, unicode.IsDigit) {
+			digits++
 		}
-		// Most contain a whole name; the rest shorten one (maria.gonz,
-		// dkowal2007).
-		if slices.ContainsFunc(firstNames, func(f string) bool { return len(f) > 2 && strings.Contains(name, f) }) ||
-			slices.ContainsFunc(lastNames, func(l string) bool { return len(l) > 2 && strings.Contains(name, l) }) {
+		if !strings.ContainsAny(name, "._-") {
+			joined++
+		}
+		if strings.Contains(name, ".") {
+			dotted++
+		}
+		if slices.ContainsFunc(firstNames, func(f string) bool { return len(f) > 3 && strings.Contains(name, f) }) {
 			withName++
 		}
 	}
-	if withName < 750 {
-		t.Errorf("only %d of 1000 email-style usernames contain a whole name", withName)
+	for _, c := range []struct {
+		what     string
+		got      int
+		min, max int // percent
+	}{
+		{"with a number", digits, 30, 55},
+		{"without a separator", joined, 45, 65},
+		{"with a dot", dotted, 25, 45},
+		{"with a whole first name", withName, 60, 95},
+	} {
+		if pct := 100 * c.got / n; pct < c.min || pct > c.max {
+			t.Errorf("%d%% of usernames are %s, want %d-%d%%", pct, c.what, c.min, c.max)
+		}
 	}
 }
 
-func TestStylesDiffer(t *testing.T) {
-	r := rand.New(rand.NewPCG(3, 3))
-	count := func(s Style, f func(string) bool) int {
-		n := 0
-		for range 1000 {
-			if f(Username(r, s)) {
-				n++
-			}
-		}
-		return n
-	}
-	hasUpper := func(n string) bool { return n != strings.ToLower(n) }
-	hasDigit := func(n string) bool { return strings.ContainsAny(n, "0123456789") }
-	// Real handles are mostly lowercase; Gaming keeps a CamelCase minority.
-	if n := count(Gaming, hasUpper); n < 50 || n > 250 {
-		t.Errorf("%d of 1000 gaming names use capitals, want a minority", n)
-	}
-	for _, s := range []Style{Email, Social} {
-		if n := count(s, hasUpper); n > 0 {
-			t.Errorf("%d of 1000 %s names use capitals", n, s)
-		}
-	}
-	if n := count(Gaming, hasDigit); n < 400 {
-		t.Errorf("only %d of 1000 gaming names have numbers", n)
-	}
-	if n := count(Email, hasDigit); n < 400 || n > 800 {
-		t.Errorf("%d of 1000 email-style names have numbers, want about half or more", n)
-	}
-}
-
-func TestWrite(t *testing.T) {
+func TestWriteIsRepeatable(t *testing.T) {
 	var a, b bytes.Buffer
-	if err := Write(&a, Styles, 500, 9); err != nil {
+	if err := Write(&a, 500, 9); err != nil {
 		t.Fatal(err)
 	}
-	Write(&b, Styles, 500, 9)
+	Write(&b, 500, 9)
 	if a.String() != b.String() {
-		t.Error("Write is not deterministic for a seed")
+		t.Error("Write gave different usernames for the same seed")
 	}
-	if n := strings.Count(a.String(), "\n"); n != 500*len(Styles) {
-		t.Errorf("Write wrote %d lines, want %d", n, 500*len(Styles))
+	if n := strings.Count(a.String(), "\n"); n != 500 {
+		t.Errorf("Write wrote %d lines, want 500", n)
 	}
 }
 
-func TestModels(t *testing.T) {
-	ms := Models()
-	if len(ms) != len(Styles) {
-		t.Fatalf("got %d models, want %d", len(ms), len(Styles))
+func TestModel(t *testing.T) {
+	m := Model()
+	if m != Model() {
+		t.Error("Model built twice")
 	}
-	if again := Models(); again[0] != ms[0] {
-		t.Error("Models rebuilt its models")
+	if got := m.Stats().Names; got < Names*9/10 {
+		t.Errorf("model learned %d usernames, want about %d", got, Names)
 	}
-	email, gaming, social := ms[0], ms[1], ms[2]
-	for _, c := range []struct {
-		m    *markov.Model
-		word string
-		want bool
-	}{
-		{email, "smith", true}, {email, "okafor", true}, {email, "yamamoto", true}, {email, "panda", false},
-		{gaming, "panda", true}, {gaming, "valkyrie", true}, {gaming, "garcia", false},
-		{social, "lavender", true}, {social, "bakes", true}, {social, "valkyrie", false},
+	for word, want := range map[string]bool{"lindqvist": true, "okafor": true, "yamamoto": true, "panda": false, "gamer": false} {
+		if got := m.KnowsWord(word); got != want {
+			t.Errorf("model knows %q = %v, want %v", word, got, want)
+		}
+	}
+}
+
+func TestPlain(t *testing.T) {
+	for name, want := range map[string]bool{
+		"stefan": true, "emma2008": true, "john92": true, "johnkevin": true,
+		"john.smith": true, "jsmith": true, "j.smith": true, "Emma_Jones": true,
+		"jason4471": false, "john.smith4821": false, "stefan.hollis": false,
+		"maya.thorne": false, "kevinlindqvist": false, "brandyholt": false,
+		"caleb.tw": false, "emma.jones.uk": false, "jb2004": false,
 	} {
-		if got := c.m.KnowsWord(c.word); got != c.want {
-			t.Errorf("%s model knows %q = %v, want %v", Styles[slices.Index(ms, c.m)], c.word, got, c.want)
+		if got := Plain(name); got != want {
+			t.Errorf("Plain(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestUnique(t *testing.T) {
+	for name, want := range map[string]bool{
+		"itsmike": false, "its.mike": false, "noahplayz": false, "xXShadowXx": false,
+		"maria.io": false, "lil_zara": false, "lilzara": false, "x.luna.x": false,
+		"mike.and.jess": false, "noah_gamer": false, "emmagirl": false, "johnkevin": false,
+		"maya.thorne": true, "brandyholt": true, "theodore": true, "lilian4410": true,
+		"itsuki.mori": true, "tariq_0912": true, "NovaTV": false, "pizzamantv": false,
+	} {
+		if got := Unique(name); got != want {
+			t.Errorf("Unique(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestTrimJoined(t *testing.T) {
+	for word, want := range map[string]string{
+		"itsmike": "mike", "noahplayz": "noah", "lilzara": "zara", "mrsmith": "smith",
+		"xxshadow": "shadow", "ItsMike": "mike", "lilian": "lilian", "theo": "theo", "maya": "maya",
+		"mrsjones": "jones", "mrbiscuit": "biscuit", "leoboy": "leo", "coleman": "coleman",
+	} {
+		if got := TrimJoined(word); got != want {
+			t.Errorf("TrimJoined(%q) = %q, want %q", word, got, want)
 		}
 	}
 }
