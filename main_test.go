@@ -33,7 +33,7 @@ func readLines(t *testing.T, path string) []string {
 
 func TestMenuTrainThenEdit(t *testing.T) {
 	t.Chdir(t.TempDir())
-	train, err := os.ReadFile(filepath.Join(repoRoot, "examples", "usernames.txt"))
+	train, err := os.ReadFile(filepath.Join(repoRoot, "testdata", "usernames.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,10 +90,10 @@ func TestMenuSurvivesErrorsAndEOF(t *testing.T) {
 	t.Chdir(t.TempDir())
 	var out strings.Builder
 	// A missing file is reported and the menu continues; input then ends.
-	if err := menu(strings.NewReader("1\nmissing.txt\n7\n"), &out, settingsFile); err != nil {
+	if err := menu(strings.NewReader("1\nmissing.txt\n9\n"), &out, settingsFile); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); !strings.Contains(got, "Error: stat missing.txt") || !strings.Contains(got, "Choose 1-6, or 0 to exit.") {
+	if got := out.String(); !strings.Contains(got, "Error: stat missing.txt") || !strings.Contains(got, "Choose 1-7, or 0 to exit.") {
 		t.Errorf("unexpected output:\n%s", got)
 	}
 }
@@ -144,7 +144,7 @@ func TestFormatCount(t *testing.T) {
 
 func TestMenuInfoAndClear(t *testing.T) {
 	t.Chdir(t.TempDir())
-	train, err := os.ReadFile(filepath.Join(repoRoot, "examples", "usernames.txt"))
+	train, err := os.ReadFile(filepath.Join(repoRoot, "testdata", "usernames.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestFileLabel(t *testing.T) {
 func trainedDir(t *testing.T) {
 	t.Helper()
 	t.Chdir(t.TempDir())
-	train, err := os.ReadFile(filepath.Join(repoRoot, "examples", "usernames.txt"))
+	train, err := os.ReadFile(filepath.Join(repoRoot, "testdata", "usernames.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,5 +374,71 @@ func TestMenuEditAsksLengths(t *testing.T) {
 	}
 	if c, _ := loadSettings(settingsFile); c.EditMinLen != 6 || c.EditMaxLen != 10 {
 		t.Errorf("lengths not remembered: %d-%d", c.EditMinLen, c.EditMaxLen)
+	}
+}
+
+func TestMenuLearnBuiltin(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeFile(t, "mine.txt", "john.smith\njsmith92\nmaria.garcia1990\n")
+	got := runMenu(t,
+		"7", "9", "0", // invalid, then back
+		"7", "1", // learn email-style knowledge
+		"4",                     // info
+		"2", "", "", "mine.txt", // edit email-style names
+		"0",
+	)
+	for _, want := range []string{
+		"Which knowledge?",
+		"Choose 1, 2 or 3, or 0 to go back.",
+		"Training [██████████████████████████████] 100%",
+		"Learned ",
+		"Saved ",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("menu output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "Which knowledge?") != 2 {
+		t.Errorf("expected two visits to the knowledge menu:\n%s", got)
+	}
+
+	// The model knows names and email structure, and edits in that style.
+	m, err := loadModel(defaultModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if words := m.TopWords(1000); !slices.Contains(words, "smith") || !slices.Contains(words, "john") {
+		t.Errorf("email knowledge lacks common names: %v", words[:min(20, len(words))])
+	}
+	edited, _ := filepath.Glob("edited_*.txt")
+	if len(edited) != 1 {
+		t.Fatalf("edited files: %v", edited)
+	}
+	for _, ed := range readLines(t, edited[0]) {
+		if ed != strings.ToLower(ed) {
+			t.Errorf("email-style edit %q is not lowercase", ed)
+		}
+	}
+}
+
+func TestBuiltinCommandMatchesMenu(t *testing.T) {
+	t.Chdir(t.TempDir())
+	runMenu(t, "7", "3", "0")
+	fromMenu, err := loadModel(defaultModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := builtin([]string{"-model", "cli.model", "-style", "both"}); err != nil {
+		t.Fatal(err)
+	}
+	fromCLI, err := loadModel("cli.model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromMenu.Stats() != fromCLI.Stats() || fromMenu.Patterns() != fromCLI.Patterns() {
+		t.Errorf("menu and command built different models: %+v vs %+v", fromMenu.Stats(), fromCLI.Stats())
+	}
+	if err := builtin([]string{"-style", "gamer"}); err == nil {
+		t.Error("builtin accepted an unknown style")
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,7 +9,17 @@ import (
 	"os"
 	"time"
 
+	"github.com/anaassss/Project/knowledge"
 	"github.com/anaassss/Project/markov"
+)
+
+const (
+	// builtinPerStyle is how many built-in usernames of each style the menu
+	// learns: enough to cover the name and word lists many times over.
+	builtinPerStyle = 100_000
+	// builtinSeed fixes the built-in usernames, so learning them always
+	// builds the same model.
+	builtinSeed = 1
 )
 
 // Training module: teach the model from files of usernames.
@@ -54,44 +65,82 @@ func train(args []string) error {
 	return nil
 }
 
-// trainFiles teaches m every username in paths ("-" is stdin), drawing a
-// progress bar on bar (nil for none), then saves m to save unless it is "".
-// It returns a one-line summary.
-func trainFiles(m *markov.Model, paths []string, save string, onRejected func(name, reason string), bar io.Writer) (string, error) {
-	var total int64
+// source is something to learn usernames from.
+type source struct {
+	name string
+	size int64 // bytes, or -1 if unknown
+	open func() (io.ReadCloser, error)
+}
+
+// fileSources returns a source for each path ("-" is stdin).
+func fileSources(paths []string) ([]source, error) {
+	var srcs []source
 	for _, path := range paths {
 		if path == "-" {
-			total = -1 // unknown
-			break
+			srcs = append(srcs, source{"stdin", -1, func() (io.ReadCloser, error) { return io.NopCloser(os.Stdin), nil }})
+			continue
 		}
 		info, err := os.Stat(path)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		total += info.Size()
+		srcs = append(srcs, source{path, info.Size(), func() (io.ReadCloser, error) { return os.Open(path) }})
+	}
+	return srcs, nil
+}
+
+// builtinSource returns the built-in knowledge of the given styles,
+// perStyle usernames each.
+func builtinSource(styles []knowledge.Style, perStyle int) (source, error) {
+	var buf bytes.Buffer
+	if err := knowledge.Write(&buf, styles, perStyle, builtinSeed); err != nil {
+		return source{}, err
+	}
+	data := buf.Bytes()
+	return source{"built-in knowledge", int64(len(data)), func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(data)), nil
+	}}, nil
+}
+
+// trainFiles teaches m every username in paths ("-" is stdin); see train.
+func trainFiles(m *markov.Model, paths []string, save string, onRejected func(name, reason string), bar io.Writer) (string, error) {
+	srcs, err := fileSources(paths)
+	if err != nil {
+		return "", err
+	}
+	return trainSources(m, srcs, save, onRejected, bar)
+}
+
+// trainSources teaches m every username in srcs, drawing a progress bar on
+// bar (nil for none), then saves m to save unless it is "". It returns a
+// one-line summary.
+func trainSources(m *markov.Model, srcs []source, save string, onRejected func(name, reason string), bar io.Writer) (string, error) {
+	var total int64
+	for _, src := range srcs {
+		if src.size < 0 {
+			total = -1
+			break
+		}
+		total += src.size
 	}
 
 	p := startProgress(bar, "Training", total)
 	res := markov.LearnResult{Rejected: map[string]int{}}
 	err := func() error {
-		for _, path := range paths {
-			r := io.Reader(os.Stdin)
-			if path != "-" {
-				f, err := os.Open(path)
-				if err != nil {
-					return err
-				}
-				defer f.Close()
-				r = f
+		for _, src := range srcs {
+			r, err := src.open()
+			if err != nil {
+				return err
 			}
 			got, err := m.LearnFrom(p.reader(r, 1), onRejected)
+			r.Close()
 			res.Added += got.Added
 			res.Known += got.Known
 			for reason, n := range got.Rejected {
 				res.Rejected[reason] += n
 			}
 			if err != nil {
-				return fmt.Errorf("reading %s: %w", path, err)
+				return fmt.Errorf("reading %s: %w", src.name, err)
 			}
 		}
 		if save != "" {
@@ -114,4 +163,36 @@ func trainSummary(res markov.LearnResult, elapsed time.Duration) string {
 		s += fmt.Sprintf(" (skipped %s already known, %s garbage)", formatCount(res.Known), formatCount(res.RejectedTotal()))
 	}
 	return s
+}
+
+// builtin teaches the model usergen's built-in knowledge of how real
+// usernames are made.
+func builtin(args []string) error {
+	flags := flag.NewFlagSet("builtin", flag.ExitOnError)
+	modelPath := flags.String("model", defaultModel, "model file to load and save")
+	style := flags.String("style", "both", "which knowledge: email, normal or both")
+	n := flags.Int("n", builtinPerStyle, "usernames to learn per style")
+	flags.Parse(args)
+
+	styles, err := knowledge.ParseStyle(*style)
+	if err != nil {
+		return err
+	}
+	if *n < 1 || *n > maxGenCount {
+		return fmt.Errorf("-n must be 1-%s", formatCount(maxGenCount))
+	}
+	m, _, err := loadOrCreate(*modelPath, defaultOrder)
+	if err != nil {
+		return err
+	}
+	src, err := builtinSource(styles, *n)
+	if err != nil {
+		return err
+	}
+	summary, err := trainSources(m, []source{src}, *modelPath, nil, terminalOrNil(os.Stderr))
+	if err != nil {
+		return err
+	}
+	fmt.Println(summary)
+	return nil
 }

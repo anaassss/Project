@@ -1,12 +1,14 @@
 # usergen
 
-Learns how usernames are built from example lists, then edits usernames you
-give it into new ones using what it learned. It handles millions of usernames
-in seconds by using every CPU core.
+Learns how usernames are built, then edits usernames you give it into new
+ones using what it learned. It comes with built-in knowledge of how real
+email-style and social/gaming usernames are made, can learn from your own
+lists too, and handles millions of usernames in seconds by using every CPU
+core.
 
 ```sh
 go build -o usergen .
-./usergen
+./usergen        # then 7 - Learn built-in knowledge, and 2 - Edit
 ```
 
 ```
@@ -16,7 +18,18 @@ go build -o usergen .
   4 - Model info
   5 - Settings
   6 - Clear all knowledge
+  7 - Learn built-in knowledge
   0 - Exit
+> 7
+Which knowledge?
+  1 - Email-style usernames   (john.smith, jsmith92, smith.j)
+  2 - Normal usernames        (SilentWolf, itsmike, xXDragonSlayerXx)
+  3 - Both
+  0 - Back
+> 1
+Training [██████████████████████████████] 100%
+Learned 78,301 new usernames in 97ms (skipped 21,699 already known, 0 garbage)
+
 > 1
 File: names.txt
 Training [██████████████████████████████] 100%
@@ -54,6 +67,24 @@ All knowledge cleared.
 5. **Settings** changes how the other options work (below).
 6. **Clear all knowledge** deletes the model after you type `yes`, so the
    next training starts from nothing.
+7. **Learn built-in knowledge** teaches the model how real usernames are
+   made (below), in the style you choose.
+
+## Built-in knowledge
+
+usergen doesn't ship anyone's real usernames. Instead it knows the patterns
+real accounts follow and generates 100,000 usernames per style from them,
+using about 200 common first names and 200 last names from many countries,
+and a few hundred everyday words:
+
+| Style | Patterns | Examples |
+|-------|----------|----------|
+| Email | first.last, firstlast, flast, f.last, firstl, last.first, first.m.last, and those with birth years or numbers | `john.smith`, `jsmith`, `neha.walker72`, `lnguyen1982`, `gpark007` |
+| Normal | AdjectiveNoun, NounNoun, name + number, its/real/the + name, name + hobby, xX…Xx, TheNoun, channel names | `SilentWolf`, `itsmike`, `sarahbakes`, `mike_92`, `xXShadowXx`, `HyperHD` |
+
+Pick the style that matches the usernames you'll edit: with **Both**, words
+from one style get swapped into the other (`maria.samurai`). To start over
+with only built-in knowledge, choose 6 - Clear all knowledge, then 7.
 
 ## Settings
 
@@ -121,10 +152,17 @@ Each username is split into words, numbers and separators
 | drop a number | `MysticPanda99` → `MysticPanda` |
 
 When the model writes characters, it only continues from patterns it has
-actually seen, and never guesses from less context. Every edit must pass the
-garbage filter below. So a username unlike anything the model learned gets
-few or no edits rather than junk; train on usernames in the same style as
-the ones you edit.
+actually seen, and never guesses from less context. Every new word it writes
+must be made of words it learned: a known word, several run together
+(`juanbaker`), or one after an initial (`jsmith`). Fragments like `leepy`
+are rejected, which Generate follows too. Every edit must pass the garbage
+filter below. So a username unlike anything the model learned gets few or no
+edits rather than junk; train on usernames in the same style as the ones you
+edit.
+
+Words are learned only from usernames that show where words start and end
+(`ShadowWolf`, `shadow_wolf`), and letters split by a leetspeak digit
+(`Fr0zen`) aren't taken for words.
 
 The saved file has one username per line with no duplicates. It leaves out
 the usernames you gave it and names the model learned from. It is never
@@ -157,6 +195,7 @@ wherever they run. Progress bars are drawn only when output goes to a
 terminal.
 
 ```sh
+./usergen builtin -style email              # or normal, or both; -n per style
 ./usergen train names.txt more.txt          # or - for stdin
 ./usergen train -dry-run -show-rejected names.txt
 ./usergen edit mine.txt

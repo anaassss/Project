@@ -11,7 +11,7 @@ import (
 
 func BenchmarkRun(b *testing.B) {
 	m, _ := markov.New(3)
-	f, err := os.Open("../examples/usernames.txt")
+	f, err := os.Open("../testdata/usernames.txt")
 	if err != nil {
 		b.Fatal(err)
 	}

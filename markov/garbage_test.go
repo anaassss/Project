@@ -65,7 +65,7 @@ func TestCheckKeepsRealUsernames(t *testing.T) {
 		"deadbeef", "cafe42", "Face1t", "haha_king", "BananaSplit",
 		"Mississippi", "Zzz", "lolol", "xXx_Slayer_xXx",
 	}
-	f, err := os.Open("../examples/usernames.txt")
+	f, err := os.Open("../testdata/usernames.txt")
 	if err != nil {
 		t.Fatal(err)
 	}

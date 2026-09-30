@@ -29,6 +29,7 @@ const usage = `usergen learns how usernames are built and edits usernames into n
 Usage:
   usergen                            interactive menu with every feature and its settings
   usergen train    [flags] FILE...   learn from username lists (one per line, "-" for stdin)
+  usergen builtin  [flags]           learn built-in knowledge of how real usernames are made
   usergen edit     [flags] FILE      edit each username in FILE; saves edited_<count>.txt
   usergen generate [flags]           generate new usernames from the saved model
   usergen stats    [flags]           show what the saved model has learned
@@ -51,6 +52,8 @@ func main() {
 	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
 	case "train":
 		err = train(args)
+	case "builtin":
+		err = builtin(args)
 	case "edit":
 		err = editCommand(args)
 	case "generate", "gen":

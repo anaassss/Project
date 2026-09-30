@@ -8,8 +8,9 @@
 //   - let the model add a few characters to the end (ShadowWolf → ShadowWolf42)
 //   - drop a number (MysticPanda99 → MysticPanda)
 //
-// The model only writes from patterns it has actually seen, and every edit
-// must pass markov.Check. A username gets fewer edits when the model knows
+// The model only writes from patterns it has actually seen, any new word it
+// writes must be made of words it learned (markov.Model.WordLike), and every
+// edit must pass markov.Check. A username gets fewer edits when the model knows
 // less that fits it. Run edits millions of usernames using every CPU core.
 package edit
 
@@ -149,6 +150,23 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 		}
 	}
 
+	// Words the model writes must be words it learned; the name's own
+	// words are kept as they are.
+	own := map[string]bool{}
+	for _, seg := range segs {
+		if seg.Kind == markov.Word {
+			own[strings.ToLower(seg.Text)] = true
+		}
+	}
+	addWritten := func(cand string) {
+		for _, seg := range markov.Split(cand) {
+			if seg.Kind == markov.Word && !own[strings.ToLower(seg.Text)] && !e.m.WordLike(seg.Text) {
+				return
+			}
+		}
+		add(cand)
+	}
+
 	for try := 0; len(dst)-start < e.opts.Max && try < e.opts.Max*attemptsPerEdit; try++ {
 		switch try % 4 {
 		case 0, 2: // swap
@@ -171,11 +189,11 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 			}
 			cut := cuts[rng.IntN(len(cuts))]
 			if cand, ok := e.m.Complete(rng, string(runes[:cut]), maxLen); ok {
-				add(cand)
+				addWritten(cand)
 			}
 		case 3: // extend
 			if cand, ok := e.m.Complete(rng, name, maxLen); ok {
-				add(cand)
+				addWritten(cand)
 			}
 		}
 	}

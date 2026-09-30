@@ -1,4 +1,4 @@
-# Example usernames to train on. One per line; blank lines and # comments are ignored.
+# Test fixture: fictional usernames used by the tests. Not built-in knowledge.
 ShadowWolf
 ShadowHunter99
 DarkKnight_7

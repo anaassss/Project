@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -219,6 +220,8 @@ func (t *tally) add(order int, name string, offs []int) []int {
 
 	// Only names that mark where words start and end ("ShadowWolf",
 	// "shadow_wolf") teach words; "shadowwolf" would teach the compound.
+	// Letters around a digit inside a word are leetspeak ("Fr0zen"), so
+	// they are fragments, not words.
 	segs := Split(name)
 	wordCount := 0
 	for _, seg := range segs {
@@ -226,9 +229,9 @@ func (t *tally) add(order int, name string, offs []int) []int {
 			wordCount++
 		}
 	}
-	for _, seg := range segs {
+	for i, seg := range segs {
 		switch {
-		case seg.Kind == Word && wordCount >= 2 && utf8.RuneCountInString(seg.Text) >= 2:
+		case seg.Kind == Word && wordCount >= 2 && utf8.RuneCountInString(seg.Text) >= 2 && !leetNeighbour(segs, i):
 			t.words[strings.ToLower(seg.Text)]++
 		case seg.Kind == Number:
 			t.numbers[seg.Text]++
@@ -243,6 +246,27 @@ func (t *tally) add(order int, name string, offs []int) []int {
 	t.stats.Names++
 	t.stats.TotalLen += uint64(n)
 	return offs
+}
+
+// leetNeighbour reports whether segs[i] is a fragment of a leetspeak word:
+// the letters before a single look-alike digit between words ("Fr" in
+// "Fr0zen", "Byt" in "Byt3Master"), or lowercase letters continuing after
+// one ("zen"). A capitalised word after the digit ("Master") is a new word,
+// and longer numbers ("Agent007Bond") aren't leetspeak.
+func leetNeighbour(segs []Segment, i int) bool {
+	leet := func(j int) bool {
+		return j > 0 && j < len(segs)-1 && segs[j].Kind == Number &&
+			len(segs[j].Text) == 1 && strings.Contains("013457", segs[j].Text) &&
+			segs[j-1].Kind == Word && segs[j+1].Kind == Word
+	}
+	if leet(i + 1) {
+		return true
+	}
+	if leet(i - 1) {
+		r, _ := utf8.DecodeRuneInString(segs[i].Text)
+		return !unicode.IsUpper(r)
+	}
+	return false
 }
 
 // merge adds o's counts to t, reusing whichever maps are larger.
@@ -268,6 +292,62 @@ func mergeCounts(dst *map[string]uint32, src map[string]uint32) {
 	for k, v := range src {
 		(*dst)[k] += v
 	}
+}
+
+const (
+	// minWordsToJudge is how many words a model must know before WordLike
+	// judges words; with fewer it can't tell a new word from a fragment.
+	minWordsToJudge = 50
+	// maxWordBytes bounds the learned words WordLike tries when splitting.
+	maxWordBytes = 24
+)
+
+// WordLike reports whether word, a run of letters, is made of words the
+// model learned: one of them, several run together ("juanbaker"), or either
+// after a one-letter initial ("jsmith"). An initial at the end ("smithj") is
+// not allowed, because it would also pass fragments like "cobrah". It
+// reports true for single letters, and when the model knows too few words
+// to judge.
+func (m *Model) WordLike(word string) bool {
+	if len(m.words) < minWordsToJudge || utf8.RuneCountInString(word) < 2 {
+		return true
+	}
+	w := strings.ToLower(word)
+	if m.compound(w) {
+		return true
+	}
+	_, first := utf8.DecodeRuneInString(w)
+	return m.compound(w[first:])
+}
+
+// NameWordsLike reports whether every word in name is WordLike.
+func (m *Model) NameWordsLike(name string) bool {
+	for _, seg := range Split(name) {
+		if seg.Kind == Word && !m.WordLike(seg.Text) {
+			return false
+		}
+	}
+	return true
+}
+
+// compound reports whether w is one or more learned words run together.
+func (m *Model) compound(w string) bool {
+	if _, ok := m.words[w]; ok {
+		return true
+	}
+	var ends [4*MaxNameLen + 1]bool // ends[i]: w[:i] splits into learned words
+	if len(w) < 2 || len(w) >= len(ends) {
+		return false
+	}
+	ends[0] = true
+	for i := 2; i <= len(w); i++ {
+		for j := max(0, i-maxWordBytes); j <= i-2 && !ends[i]; j++ {
+			if ends[j] {
+				_, ends[i] = m.words[w[j:i]]
+			}
+		}
+	}
+	return ends[len(w)]
 }
 
 // TopWords returns up to n learned words, lowercased, most common first.
@@ -495,7 +575,8 @@ type GenerateOptions struct {
 	Progress func(found int)
 }
 
-// Generate returns up to n distinct usernames that pass Check. It returns
+// Generate returns up to n distinct usernames that pass Check and whose
+// words are WordLike. It returns
 // fewer than n when the model cannot produce enough distinct names satisfying
 // opts, which typically means it was trained on too few names for its order.
 func (m *Model) Generate(rng *rand.Rand, n int, opts GenerateOptions) ([]string, error) {
@@ -531,7 +612,7 @@ func (m *Model) Generate(rng *rand.Rand, n int, opts GenerateOptions) ([]string,
 		if _, dup := produced[h]; dup {
 			continue
 		}
-		if (!opts.AllowKnown && m.seen.has(h)) || Check(name) != nil {
+		if (!opts.AllowKnown && m.seen.has(h)) || Check(name) != nil || !m.NameWordsLike(name) {
 			continue
 		}
 		produced[h] = struct{}{}

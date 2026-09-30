@@ -321,3 +321,50 @@ func TestHashSetFilterIsExact(t *testing.T) {
 		t.Error("element added after the filter was built is missing")
 	}
 }
+
+func TestLeetFragmentsAreNotWords(t *testing.T) {
+	m, _ := New(3)
+	for _, name := range []string{"Fr0zenBreaker", "Byt3Master", "ShadowWolf99", "Agent007Bond"} {
+		m.Learn(name)
+	}
+	for _, frag := range []string{"fr", "zen", "byt"} {
+		if _, ok := m.words[frag]; ok {
+			t.Errorf("learned leet fragment %q as a word", frag)
+		}
+	}
+	for _, word := range []string{"breaker", "master", "shadow", "wolf", "agent", "bond"} {
+		if _, ok := m.words[word]; !ok {
+			t.Errorf("did not learn %q", word)
+		}
+	}
+}
+
+func TestWordLike(t *testing.T) {
+	m, _ := New(3)
+	// Enough two-word names to pass minWordsToJudge.
+	first := strings.Fields("john maria juan sarah mike david emma lucas nora omar ivan mei raj ana leo sam kate ben lily max owen zoe ali eva tom")
+	last := strings.Fields("smith garcia baker lee jones brown silva khan chen park wood hill king ford hale ross moss nash reed lowe cole dunn fox gray hunt")
+	for i, f := range first {
+		m.Learn(f + "." + last[i])
+	}
+	if len(m.words) < minWordsToJudge {
+		t.Fatalf("setup learned only %d words", len(m.words))
+	}
+	for word, want := range map[string]bool{
+		"smith": true, "Smith": true, "juanbaker": true, "jsmith": true, "smithj": false,
+		"bakerh": false, "x": true, "leepy": false, "retr": false, "smithxyz": false, "jdsmith": false,
+	} {
+		if got := m.WordLike(word); got != want {
+			t.Errorf("WordLike(%q) = %v, want %v", word, got, want)
+		}
+	}
+	if !m.NameWordsLike("john.smith92") || m.NameWordsLike("john.leepy") {
+		t.Error("NameWordsLike judged names wrongly")
+	}
+
+	small, _ := New(3)
+	small.Learn("ShadowWolf")
+	if !small.WordLike("anything") {
+		t.Error("a model with few words judged a word")
+	}
+}

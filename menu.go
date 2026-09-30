@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/anaassss/Project/edit"
+	"github.com/anaassss/Project/knowledge"
 	"github.com/anaassss/Project/markov"
 )
 
@@ -56,10 +57,12 @@ func menu(in io.Reader, out io.Writer, settingsPath string) error {
 			err = s.settingsScreen()
 		case "6":
 			err = s.clear()
+		case "7":
+			err = s.learnBuiltin()
 		case "0", "q", "exit", "quit":
 			return nil
 		default:
-			fmt.Fprintln(out, "Choose 1-6, or 0 to exit.")
+			fmt.Fprintln(out, "Choose 1-7, or 0 to exit.")
 			continue
 		}
 		if errors.Is(err, io.EOF) {
@@ -83,6 +86,7 @@ func (s *session) printMenu() {
   4 - Model info
   5 - Settings
   6 - Clear all knowledge
+  7 - Learn built-in knowledge
   0 - Exit
 `, training)
 }
@@ -122,6 +126,51 @@ func (s *session) train() error {
 	if err != nil {
 		return err
 	}
+	srcs, err := fileSources([]string{path})
+	if err != nil {
+		return err
+	}
+	return s.learn(srcs)
+}
+
+func (s *session) learnBuiltin() error {
+	fmt.Fprint(s.out, `Which knowledge?
+  1 - Email-style usernames   (john.smith, jsmith92, smith.j)
+  2 - Normal usernames        (SilentWolf, itsmike, xXDragonSlayerXx)
+  3 - Both
+  0 - Back
+`)
+	for {
+		answer, err := s.ask("> ")
+		if err != nil {
+			return err
+		}
+		var styles []knowledge.Style
+		switch answer {
+		case "1":
+			styles = []knowledge.Style{knowledge.Email}
+		case "2":
+			styles = []knowledge.Style{knowledge.Normal}
+		case "3":
+			styles = knowledge.Styles
+		case "0", "":
+			return nil
+		default:
+			fmt.Fprintln(s.out, "Choose 1, 2 or 3, or 0 to go back.")
+			continue
+		}
+		src, err := builtinSource(styles, builtinPerStyle)
+		if err != nil {
+			return err
+		}
+		return s.learn([]source{src})
+	}
+}
+
+// learn teaches the model everything in srcs, following the Training
+// settings, and reports the result.
+func (s *session) learn(srcs []source) error {
+	var err error
 	if s.m == nil {
 		if s.m, _, err = loadOrCreate(s.cfg.ModelFile, s.cfg.Order); err != nil {
 			return err
@@ -142,7 +191,7 @@ func (s *session) train() error {
 		onRejected = func(name, reason string) { rejected.writeLine(name + "\t" + reason) }
 	}
 
-	summary, err := trainFiles(s.m, []string{path}, save, onRejected, s.out)
+	summary, err := trainSources(s.m, srcs, save, onRejected, s.out)
 	if err != nil || s.cfg.DryRun {
 		s.m = nil // reload from disk next time rather than keep unsaved learning
 	}
