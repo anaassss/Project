@@ -23,9 +23,11 @@ Training [███████████████████████�
 Learned 1,001,559 new usernames in 1.5s (skipped 898,193 already known, 100,248 garbage)
 
 > 2
+Shortest length (3-24) [3]: 8
+Longest length (8-24) [24]: 12
 File: mine.txt
 Editing  [██████████████████████████████] 100%
-Saved 6,224,124 edited usernames to edited_6224124.txt in 5s
+Saved 2,784,132 edited usernames (8-12 characters) to edited_2784132.txt in 5.6s
 
 > 4
   Model file   usergen.model (8.7 MB)
@@ -42,8 +44,9 @@ All knowledge cleared.
 1. **Training** learns from a file of usernames (one per line) and saves what
    it learned to `usergen.model`. Each run adds to the model rather than
    starting over.
-2. **Edit** turns every username in a file into up to 10 new ones and saves
-   them to `edited_<count>.txt`.
+2. **Edit** asks for the shortest and longest length you want (Enter keeps
+   the last ones used), then turns every username in a file into up to 10
+   new ones of that length and saves them to `edited_<count>.txt`.
 3. **Generate** makes brand-new usernames from scratch and saves them to
    `generated_<count>.txt`, showing the first few.
 4. **Model info** shows what the model has learned: how many usernames,
@@ -65,17 +68,19 @@ Settings (saved in usergen.settings.json)
     3  Dry run: learn nothing, just report            off
   Edit
     4  Edits per username                             10
+    5  Shortest length (3-24)                         3
+    6  Longest length (3-24)                          24
   Generate
-    5  How many usernames                             10
-    6  Shortest length                                4
-    7  Longest length                                 16
-    8  Creativity (1 = as learned, higher = wilder)   1
-    9  Context length (0 = the model's)               0
+    7  How many usernames                             10
+    8  Shortest length (3-24)                         4
+    9  Longest length (3-24)                          16
+   10  Creativity (1 = as learned, higher = wilder)   1
+   11  Context length (0 = the model's)               0
   Edit and Generate
-   10  Allow usernames the model learned from         off
-   11  Seed (0 = random each time)                    0
+   12  Allow usernames the model learned from         off
+   13  Seed (0 = random each time)                    0
   Model
-   12  Model file                                     usergen.model
+   14  Model file                                     usergen.model
     0  Back
 ```
 
@@ -97,6 +102,7 @@ Measured on a 4-core machine; more cores are faster.
 |------|-------|------|
 | Training | 2,000,000 lines | 1.5 s |
 | Edit | 1,000,000 usernames → 6.2M edits | 5 s |
+| Edit, 8-12 characters | 1,000,000 usernames → 2.8M edits | 5.6 s |
 
 Training checks and deduplicates names in file order, then counts patterns on
 every core. Editing splits the input across every core and writes results in
@@ -154,7 +160,7 @@ terminal.
 ./usergen train names.txt more.txt          # or - for stdin
 ./usergen train -dry-run -show-rejected names.txt
 ./usergen edit mine.txt
-./usergen edit -max 5 -seed 42 mine.txt
+./usergen edit -min 8 -max 12 -edits 5 -seed 42 mine.txt
 ./usergen generate -n 20                    # brand-new usernames from scratch
 ./usergen stats
 ```
@@ -165,10 +171,11 @@ terminal.
 | `-order` | train | characters of context for a **new** model (default 3) |
 | `-show-rejected` | train | print each garbage username skipped and why |
 | `-dry-run` | train | report what would be learned without saving |
-| `-max` | edit | most edits per username (default 10) |
+| `-edits` | edit | most edits per username (default 10) |
+| `-min`, `-max` | edit | shortest and longest edit in characters (default 3-24) |
 | `-seed` | edit, generate | fixed seed for repeatable output (0 = random) |
 | `-allow-known` | edit, generate | allow names the model learned from |
-| `-n`, `-min`, `-max`, `-temp`, `-order` | generate | count, length bounds, creativity, context |
+| `-n`, `-min`, `-max`, `-temp`, `-order` | generate | count, shortest and longest length, creativity, context |
 
 ## Model file
 

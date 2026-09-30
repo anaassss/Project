@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/anaassss/Project/markov"
 )
@@ -190,5 +191,49 @@ func TestDrop(t *testing.T) {
 		if got := drop(segs, i); got != want {
 			t.Errorf("drop(%q, Wolf) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestEditRespectsLengthBounds(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		min, max int
+	}{
+		{"ShadowFox", 6, 9},
+		{"DarkWolf_7", 11, 14},
+		{"StormHawk99", 3, 8},
+		{"Shadow_Fox", 13, 20}, // longer than the name itself
+	} {
+		e := editor(t, Options{Max: 30, MinLen: c.min, MaxLen: c.max})
+		edits := e.Edit(rng(), c.name, nil)
+		if len(edits) == 0 {
+			t.Errorf("Edit(%q) within %d-%d returned nothing", c.name, c.min, c.max)
+		}
+		for _, ed := range edits {
+			if n := utf8.RuneCountInString(ed); n < c.min || n > c.max {
+				t.Errorf("Edit(%q) within %d-%d returned %q (%d characters)", c.name, c.min, c.max, ed, n)
+			}
+		}
+	}
+}
+
+func TestNewRejectsBadLengths(t *testing.T) {
+	for _, o := range []Options{
+		{Max: 5, MinLen: 2, MaxLen: 10},
+		{Max: 5, MinLen: 5, MaxLen: 25},
+		{Max: 5, MinLen: 10, MaxLen: 6},
+	} {
+		if _, err := New(model(t), o); err == nil {
+			t.Errorf("New accepted lengths %d-%d", o.MinLen, o.MaxLen)
+		}
+	}
+}
+
+func TestEditDeclinesUnreachableLengths(t *testing.T) {
+	// Nothing learned can make IronFox 12+ characters: the longest learned
+	// word is 7 letters and Fox has only ever ended a name.
+	e := editor(t, Options{Max: 10, MinLen: 12, MaxLen: 20})
+	if edits := e.Edit(rng(), "IronFox", nil); len(edits) != 0 {
+		t.Errorf("Edit(IronFox) within 12-20 = %v, want none", edits)
 	}
 }

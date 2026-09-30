@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/anaassss/Project/edit"
@@ -166,11 +167,27 @@ func (s *session) edit() error {
 	if ok, err := s.model(); !ok {
 		return err
 	}
+	minLen, err := s.askInt("Shortest length", s.cfg.EditMinLen, markov.MinNameLen, markov.MaxNameLen)
+	if err != nil {
+		return err
+	}
+	maxLen, err := s.askInt("Longest length", max(s.cfg.EditMaxLen, minLen), minLen, markov.MaxNameLen)
+	if err != nil {
+		return err
+	}
+	if minLen != s.cfg.EditMinLen || maxLen != s.cfg.EditMaxLen {
+		next := s.cfg
+		next.EditMinLen, next.EditMaxLen = minLen, maxLen
+		if err := next.save(s.settingsPath); err != nil {
+			return fmt.Errorf("saving settings: %w", err)
+		}
+		s.cfg = next
+	}
 	path, err := s.askPath("File: ")
 	if err != nil {
 		return err
 	}
-	opts := edit.Options{Max: s.cfg.EditsPerName, AllowKnown: s.cfg.AllowKnown}
+	opts := edit.Options{Max: s.cfg.EditsPerName, AllowKnown: s.cfg.AllowKnown, MinLen: minLen, MaxLen: maxLen}
 	summary, err := editFile(s.m, path, opts, s.cfg.Seed, ".", s.out)
 	if err != nil {
 		return err
@@ -268,6 +285,24 @@ func (s *session) ask(prompt string) (string, error) {
 		err = nil
 	}
 	return line, err
+}
+
+// askInt asks for a whole number from lo to hi, returning current if the
+// user just presses Enter.
+func (s *session) askInt(label string, current, lo, hi int) (int, error) {
+	for {
+		answer, err := s.ask(fmt.Sprintf("%s (%d-%d) [%d]: ", label, lo, hi, current))
+		if err != nil {
+			return 0, err
+		}
+		if answer == "" {
+			return current, nil
+		}
+		if n, err := strconv.Atoi(answer); err == nil && n >= lo && n <= hi {
+			return n, nil
+		}
+		fmt.Fprintf(s.out, "Enter a whole number from %d to %d.\n", lo, hi)
+	}
 }
 
 // askPath asks for a file path, accepting forms terminals produce when a file

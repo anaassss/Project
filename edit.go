@@ -27,7 +27,9 @@ const (
 func editCommand(args []string) error {
 	flags := flag.NewFlagSet("edit", flag.ExitOnError)
 	modelPath := flags.String("model", defaultModel, "model file to edit with")
-	maxEdits := flags.Int("max", defaultMaxEdits, "most edits per username; the model may find fewer")
+	maxEdits := flags.Int("edits", defaultMaxEdits, "most edits per username; the model may find fewer")
+	minLen := flags.Int("min", markov.MinNameLen, "shortest edit, in characters")
+	maxLen := flags.Int("max", markov.MaxNameLen, "longest edit, in characters")
 	seed := flags.Uint64("seed", 0, "random seed for repeatable output (0 = random)")
 	allowKnown := flags.Bool("allow-known", false, "allow edits that are usernames the model learned from")
 	flags.Parse(args)
@@ -39,7 +41,7 @@ func editCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	opts := edit.Options{Max: *maxEdits, AllowKnown: *allowKnown}
+	opts := edit.Options{Max: *maxEdits, AllowKnown: *allowKnown, MinLen: *minLen, MaxLen: *maxLen}
 	summary, err := editFile(m, flags.Arg(0), opts, *seed, ".", terminalOrNil(os.Stderr))
 	if err != nil {
 		return err
@@ -52,6 +54,12 @@ func editCommand(args []string) error {
 // to edited_<count>.txt in dir, drawing a progress bar on bar (nil for none).
 // It returns a one-line summary.
 func editFile(m *markov.Model, path string, opts edit.Options, seed uint64, dir string, bar io.Writer) (string, error) {
+	if opts.MinLen == 0 {
+		opts.MinLen = markov.MinNameLen
+	}
+	if opts.MaxLen == 0 {
+		opts.MaxLen = markov.MaxNameLen
+	}
 	e, err := edit.New(m, opts)
 	if err != nil {
 		return "", err
@@ -107,12 +115,13 @@ func editFile(m *markov.Model, path string, opts edit.Options, seed uint64, dir 
 	if err != nil {
 		return "", err
 	}
-	return editSummary(out, count, elapsed), nil
+	return editSummary(out, count, opts, elapsed), nil
 }
 
-func editSummary(path string, count int, elapsed time.Duration) string {
+func editSummary(path string, count int, opts edit.Options, elapsed time.Duration) string {
+	lengths := fmt.Sprintf("%d-%d characters", opts.MinLen, opts.MaxLen)
 	if count == 0 {
-		return "No edits found; train on more usernames like these first."
+		return fmt.Sprintf("No edits of %s found; widen the lengths or train on more usernames like these.", lengths)
 	}
-	return fmt.Sprintf("Saved %s edited usernames to %s in %s", formatCount(count), path, formatDuration(elapsed))
+	return fmt.Sprintf("Saved %s edited usernames (%s) to %s in %s", formatCount(count), lengths, path, formatDuration(elapsed))
 }

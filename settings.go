@@ -24,6 +24,8 @@ type settings struct {
 	SaveRejected bool    `json:"save_rejected"`
 	DryRun       bool    `json:"dry_run"`
 	EditsPerName int     `json:"edits_per_username"`
+	EditMinLen   int     `json:"edit_min_length"`
+	EditMaxLen   int     `json:"edit_max_length"`
 	GenCount     int     `json:"generate_count"`
 	GenMinLen    int     `json:"generate_min_length"`
 	GenMaxLen    int     `json:"generate_max_length"`
@@ -38,6 +40,8 @@ func defaultSettings() settings {
 		ModelFile:    defaultModel,
 		Order:        defaultOrder,
 		EditsPerName: defaultMaxEdits,
+		EditMinLen:   markov.MinNameLen,
+		EditMaxLen:   markov.MaxNameLen,
 		GenCount:     10,
 		GenMinLen:    4,
 		GenMaxLen:    16,
@@ -60,12 +64,16 @@ func (c settings) validate() error {
 		return fmt.Errorf("context length must be 1-%d", markov.MaxOrder)
 	case c.EditsPerName < 1 || c.EditsPerName > maxEditsPerName:
 		return fmt.Errorf("edits per username must be 1-%d", maxEditsPerName)
+	case c.EditMinLen < markov.MinNameLen || c.EditMaxLen > markov.MaxNameLen:
+		return fmt.Errorf("edit lengths must be %d-%d", markov.MinNameLen, markov.MaxNameLen)
+	case c.EditMinLen > c.EditMaxLen:
+		return fmt.Errorf("edit shortest length %d is above longest length %d", c.EditMinLen, c.EditMaxLen)
 	case c.GenCount < 1 || c.GenCount > maxGenCount:
 		return fmt.Errorf("how many usernames must be 1-%s", formatCount(maxGenCount))
 	case c.GenMinLen < markov.MinNameLen || c.GenMaxLen > markov.MaxNameLen:
-		return fmt.Errorf("lengths must be %d-%d", markov.MinNameLen, markov.MaxNameLen)
+		return fmt.Errorf("generate lengths must be %d-%d", markov.MinNameLen, markov.MaxNameLen)
 	case c.GenMinLen > c.GenMaxLen:
-		return fmt.Errorf("shortest length %d is above longest length %d", c.GenMinLen, c.GenMaxLen)
+		return fmt.Errorf("generate shortest length %d is above longest length %d", c.GenMinLen, c.GenMaxLen)
 	case !(c.GenTemp > 0 && c.GenTemp <= maxTemp):
 		return fmt.Errorf("creativity must be above 0 and at most %g", maxTemp)
 	case c.GenOrder < 0 || c.GenOrder > markov.MaxOrder:
@@ -167,9 +175,11 @@ var options = []option{
 	boolOption("Training", "Save rejected usernames to a file", func(c *settings) *bool { return &c.SaveRejected }),
 	boolOption("Training", "Dry run: learn nothing, just report", func(c *settings) *bool { return &c.DryRun }),
 	intOption("Edit", "Edits per username", func(c *settings) *int { return &c.EditsPerName }),
+	intOption("Edit", "Shortest length (3-24)", func(c *settings) *int { return &c.EditMinLen }),
+	intOption("Edit", "Longest length (3-24)", func(c *settings) *int { return &c.EditMaxLen }),
 	intOption("Generate", "How many usernames", func(c *settings) *int { return &c.GenCount }),
-	intOption("Generate", "Shortest length", func(c *settings) *int { return &c.GenMinLen }),
-	intOption("Generate", "Longest length", func(c *settings) *int { return &c.GenMaxLen }),
+	intOption("Generate", "Shortest length (3-24)", func(c *settings) *int { return &c.GenMinLen }),
+	intOption("Generate", "Longest length (3-24)", func(c *settings) *int { return &c.GenMaxLen }),
 	{
 		group: "Generate",
 		label: "Creativity (1 = as learned, higher = wilder)",

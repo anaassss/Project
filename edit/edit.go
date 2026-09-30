@@ -16,6 +16,7 @@ package edit
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"runtime"
@@ -46,6 +47,10 @@ const (
 type Options struct {
 	Max        int  // most edits per username
 	AllowKnown bool // allow edits that are usernames the model learned from
+
+	// MinLen and MaxLen bound every edit's length in characters. Zero means
+	// markov.MinNameLen and markov.MaxNameLen, the garbage filter's limits.
+	MinLen, MaxLen int
 }
 
 // Editor edits usernames with one model. It is safe for concurrent use.
@@ -65,6 +70,16 @@ func New(m *markov.Model, opts Options) (*Editor, error) {
 	if opts.Max < 1 {
 		return nil, errors.New("edits per username must be at least 1")
 	}
+	if opts.MinLen == 0 {
+		opts.MinLen = markov.MinNameLen
+	}
+	if opts.MaxLen == 0 {
+		opts.MaxLen = markov.MaxNameLen
+	}
+	if opts.MinLen < markov.MinNameLen || opts.MaxLen > markov.MaxNameLen || opts.MinLen > opts.MaxLen {
+		return nil, fmt.Errorf("lengths must be %d-%d with the shortest no longer than the longest, got %d-%d",
+			markov.MinNameLen, markov.MaxNameLen, opts.MinLen, opts.MaxLen)
+	}
 	return &Editor{
 		m:       m,
 		opts:    opts,
@@ -73,7 +88,8 @@ func New(m *markov.Model, opts Options) (*Editor, error) {
 	}, nil
 }
 
-// Edit appends up to Max distinct edits of name to dst and returns it.
+// Edit appends up to Max distinct edits of name, each MinLen-MaxLen
+// characters long, to dst and returns it.
 func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 	start := len(dst)
 	// FoldHash identifies a candidate for every duplicate check; Check, the
@@ -81,6 +97,9 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 	hashes := make([]uint64, 1, e.opts.Max+1)
 	hashes[0] = markov.FoldHash(name)
 	add := func(cand string) {
+		if n := utf8.RuneCountInString(cand); n < e.opts.MinLen || n > e.opts.MaxLen {
+			return
+		}
 		h := markov.FoldHash(cand)
 		if slices.Contains(hashes, h) || (!e.opts.AllowKnown && e.m.KnowsHash(h)) || markov.Check(cand) != nil {
 			return
@@ -119,7 +138,8 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 	// Rewrite only from whole-segment boundaries: cutting inside a word
 	// leaves fragments the model can't finish sensibly ("BlueSk" → "BlueSker").
 	runes := []rune(name)
-	maxLen := min(len(runes)+maxGrowth, markov.MaxNameLen)
+	// The model may write past maxGrowth only as far as MinLen requires.
+	maxLen := min(max(len(runes)+maxGrowth, e.opts.MinLen), e.opts.MaxLen)
 	var cuts []int
 	kept := 0
 	for _, seg := range segs[:max(len(segs)-1, 0)] {

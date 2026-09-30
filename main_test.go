@@ -44,7 +44,7 @@ func TestMenuTrainThenEdit(t *testing.T) {
 		"2",              // edit before training: refused
 		"1", "names.txt", // train
 		"1", "names.txt", // train again: all already known
-		"2", `to\ edit.txt`, // edit
+		"2", "", "", `to\ edit.txt`, // edit with the default lengths
 		"0",
 	}, "\n") + "\n"
 	var out strings.Builder
@@ -65,7 +65,7 @@ func TestMenuTrainThenEdit(t *testing.T) {
 		}
 	}
 
-	saved := regexp.MustCompile(`Saved (\d+) edited usernames to (edited_\d+\.txt) in `).FindStringSubmatch(got)
+	saved := regexp.MustCompile(`Saved (\d+) edited usernames \(3-24 characters\) to (edited_\d+\.txt) in `).FindStringSubmatch(got)
 	if saved == nil {
 		t.Fatalf("no edits saved:\n%s", got)
 	}
@@ -230,20 +230,20 @@ func TestMenuSettingsApply(t *testing.T) {
 	got := runMenu(t,
 		"5",             // settings
 		"4", "abc", "3", // edits per username: invalid, then 3
-		"6", "20", // shortest length 20 > longest 16: refused
-		"5", "7", // generate 7 usernames
-		"11", "42", // seed
-		"12", "other.model", // model file
+		"8", "20", // generate shortest length 20 > longest 16: refused
+		"7", "7", // generate 7 usernames
+		"13", "42", // seed
+		"14", "other.model", // model file
 		"0",
 		"1", "names.txt", // train into other.model
-		"2", "mine.txt", // edit
+		"2", "", "", "mine.txt", // edit with the default lengths
 		"3", // generate
 		"0",
 	)
 	for _, want := range []string{
 		"Enter a whole number.",
-		"Not changed: shortest length 20 is above longest length 16.",
-		"   12  Model file                                     other.model",
+		"Not changed: generate shortest length 20 is above longest length 16.",
+		"   14  Model file                                     other.model",
 		"Saved 7 new usernames to generated_7.txt",
 	} {
 		if !strings.Contains(got, want) {
@@ -333,5 +333,46 @@ func TestLoadSettings(t *testing.T) {
 	writeFile(t, settingsFile, "not json")
 	if err := menu(strings.NewReader("0\n"), &out, settingsFile); err != nil || !strings.Contains(out.String(), "using default settings") {
 		t.Errorf("menu with bad settings: %v\n%s", err, out.String())
+	}
+}
+
+func TestMenuEditAsksLengths(t *testing.T) {
+	trainedDir(t)
+	writeFile(t, "mine.txt", "ShadowFox\nDarkWolf_7\nStormHawk99\nMysticPanda\n")
+	got := runMenu(t,
+		"1", "names.txt",
+		"2",
+		"2", "abc", "6", // shortest: out of range, not a number, then 6
+		"5", "10", // longest: below the shortest, then 10
+		"mine.txt",
+		"2", "", "", "mine.txt", // Enter keeps 6 and 10
+		"0",
+	)
+	for _, want := range []string{
+		"Shortest length (3-24) [3]: ",
+		"Enter a whole number from 3 to 24.",
+		"Longest length (6-24) [24]: ",
+		"Enter a whole number from 6 to 24.",
+		"Shortest length (3-24) [6]: ",
+		"Longest length (6-24) [10]: ",
+		"edited usernames (6-10 characters) to edited_",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("menu output missing %q:\n%s", want, got)
+		}
+	}
+	files, _ := filepath.Glob("edited_*.txt")
+	if len(files) != 2 {
+		t.Fatalf("edited files: %v", files)
+	}
+	for _, f := range files {
+		for _, ed := range readLines(t, f) {
+			if n := len([]rune(ed)); n < 6 || n > 10 {
+				t.Errorf("%s has %q (%d characters), want 6-10", f, ed, n)
+			}
+		}
+	}
+	if c, _ := loadSettings(settingsFile); c.EditMinLen != 6 || c.EditMaxLen != 10 {
+		t.Errorf("lengths not remembered: %d-%d", c.EditMinLen, c.EditMaxLen)
 	}
 }
