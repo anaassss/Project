@@ -17,7 +17,7 @@ func BenchmarkRun(b *testing.B) {
 	}
 	m.LearnFrom(f, nil)
 	f.Close()
-	e, _ := New(m, Options{Max: 10})
+	e, _ := New([]*markov.Model{m}, Options{Max: 10})
 
 	inputs := []string{"ShadowFox", "DarkWolf_7", "StormHawk99", "coolguy", "xXSniperXx", "Mystic.Panda"}
 	var in strings.Builder

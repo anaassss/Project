@@ -5,14 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/anaassss/Project/edit"
-	"github.com/anaassss/Project/knowledge"
 	"github.com/anaassss/Project/markov"
 )
 
@@ -57,12 +56,10 @@ func menu(in io.Reader, out io.Writer, settingsPath string) error {
 			err = s.settingsScreen()
 		case "6":
 			err = s.clear()
-		case "7":
-			err = s.learnBuiltin()
 		case "0", "q", "exit", "quit":
 			return nil
 		default:
-			fmt.Fprintln(out, "Choose 1-7, or 0 to exit.")
+			fmt.Fprintln(out, "Choose 1-6, or 0 to exit.")
 			continue
 		}
 		if errors.Is(err, io.EOF) {
@@ -75,7 +72,7 @@ func menu(in io.Reader, out io.Writer, settingsPath string) error {
 }
 
 func (s *session) printMenu() {
-	training := "Training"
+	training := "Training (your own knowledge)"
 	if s.cfg.DryRun {
 		training += "   (dry run is on: nothing will be saved)"
 	}
@@ -83,10 +80,9 @@ func (s *session) printMenu() {
   1 - %s
   2 - Edit
   3 - Generate
-  4 - Model info
+  4 - Knowledge info
   5 - Settings
-  6 - Clear all knowledge
-  7 - Learn built-in knowledge
+  6 - Clear own knowledge
   0 - Exit
 `, training)
 }
@@ -131,40 +127,6 @@ func (s *session) train() error {
 		return err
 	}
 	return s.learn(srcs)
-}
-
-func (s *session) learnBuiltin() error {
-	fmt.Fprint(s.out, `Which knowledge?
-  1 - Email-style usernames   (john.smith, jsmith92, smith.j)
-  2 - Normal usernames        (SilentWolf, itsmike, xXDragonSlayerXx)
-  3 - Both
-  0 - Back
-`)
-	for {
-		answer, err := s.ask("> ")
-		if err != nil {
-			return err
-		}
-		var styles []knowledge.Style
-		switch answer {
-		case "1":
-			styles = []knowledge.Style{knowledge.Email}
-		case "2":
-			styles = []knowledge.Style{knowledge.Normal}
-		case "3":
-			styles = knowledge.Styles
-		case "0", "":
-			return nil
-		default:
-			fmt.Fprintln(s.out, "Choose 1, 2 or 3, or 0 to go back.")
-			continue
-		}
-		src, err := builtinSource(styles, builtinPerStyle)
-		if err != nil {
-			return err
-		}
-		return s.learn([]source{src})
-	}
 }
 
 // learn teaches the model everything in srcs, following the Training
@@ -213,9 +175,6 @@ func (s *session) learn(srcs []source) error {
 }
 
 func (s *session) edit() error {
-	if ok, err := s.model(); !ok {
-		return err
-	}
 	minLen, err := s.askInt("Shortest length", s.cfg.EditMinLen, markov.MinNameLen, markov.MaxNameLen)
 	if err != nil {
 		return err
@@ -224,20 +183,25 @@ func (s *session) edit() error {
 	if err != nil {
 		return err
 	}
-	if minLen != s.cfg.EditMinLen || maxLen != s.cfg.EditMaxLen {
-		next := s.cfg
-		next.EditMinLen, next.EditMaxLen = minLen, maxLen
-		if err := next.save(s.settingsPath); err != nil {
-			return fmt.Errorf("saving settings: %w", err)
-		}
-		s.cfg = next
+	models, choice, err := s.chooseKnowledge()
+	if err != nil {
+		return err
+	}
+	perName, err := s.askEdits()
+	if err != nil {
+		return err
+	}
+	next := s.cfg
+	next.EditMinLen, next.EditMaxLen, next.Knowledge, next.EditsPerName = minLen, maxLen, choice, perName
+	if err := s.remember(next); err != nil {
+		return err
 	}
 	path, err := s.askPath("File: ")
 	if err != nil {
 		return err
 	}
-	opts := edit.Options{Max: s.cfg.EditsPerName, AllowKnown: s.cfg.AllowKnown, MinLen: minLen, MaxLen: maxLen}
-	summary, err := editFile(s.m, path, opts, s.cfg.Seed, ".", s.out)
+	opts := edit.Options{Max: perName, AllowKnown: s.cfg.AllowKnown, MinLen: minLen, MaxLen: maxLen}
+	summary, err := editFile(models, path, opts, s.cfg.Seed, ".", s.out)
 	if err != nil {
 		return err
 	}
@@ -245,21 +209,98 @@ func (s *session) edit() error {
 	return nil
 }
 
+// chooseKnowledge asks which knowledge to use, offering the last choice,
+// and returns its models and the choice.
+func (s *session) chooseKnowledge() ([]*markov.Model, string, error) {
+	fmt.Fprint(s.out, "Which knowledge?\n  1 - Own\n  2 - Claude\n  3 - Both\n")
+	current := slices.Index(knowledgeChoices, s.cfg.Knowledge) + 1
+	for {
+		answer, err := s.ask(fmt.Sprintf("Choose 1-3 [%d]: ", current))
+		if err != nil {
+			return nil, "", err
+		}
+		if answer == "" {
+			answer = strconv.Itoa(current)
+		}
+		i, err := strconv.Atoi(answer)
+		if err != nil || i < 1 || i > len(knowledgeChoices) {
+			fmt.Fprintln(s.out, "Choose 1, 2 or 3.")
+			continue
+		}
+		choice := knowledgeChoices[i-1]
+		own, err := s.loadQuiet()
+		if err != nil {
+			return nil, "", err
+		}
+		models, note, err := knowledgeFor(choice, own)
+		if errors.Is(err, errNoOwnKnowledge) {
+			fmt.Fprintln(s.out, "You haven't trained your own knowledge yet: use 1 - Training first, or choose 2 - Claude.")
+			continue
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		if note != "" {
+			fmt.Fprintln(s.out, note)
+		}
+		return models, choice, nil
+	}
+}
+
+// askEdits asks how many edits to make per username, offering the last
+// answer. It returns 0 for max.
+func (s *session) askEdits() (int, error) {
+	for {
+		answer, err := s.ask(fmt.Sprintf("Edits per username (1-%d, or max) [%s]: ", maxEditsPerName, editsLabel(s.cfg.EditsPerName)))
+		if err != nil {
+			return 0, err
+		}
+		if answer == "" {
+			return s.cfg.EditsPerName, nil
+		}
+		n, err := parseEdits(answer)
+		if err != nil {
+			fmt.Fprintln(s.out, capitalize(err.Error())+".")
+			continue
+		}
+		if n == 0 {
+			fmt.Fprintln(s.out, "max makes every edit the knowledge allows: often hundreds per username.")
+		}
+		return n, nil
+	}
+}
+
+// remember saves next as the settings if it differs from the current ones.
+func (s *session) remember(next settings) error {
+	if next == s.cfg {
+		return nil
+	}
+	if err := next.save(s.settingsPath); err != nil {
+		return fmt.Errorf("saving settings: %w", err)
+	}
+	s.cfg = next
+	return nil
+}
+
 func (s *session) generate() error {
-	if ok, err := s.model(); !ok {
+	models, choice, err := s.chooseKnowledge()
+	if err != nil {
+		return err
+	}
+	next := s.cfg
+	next.Knowledge = choice
+	if err := s.remember(next); err != nil {
 		return err
 	}
 	c := s.cfg
-	seed := orRandom(c.Seed)
 	p := startProgress(s.out, "Generating", int64(c.GenCount))
-	names, err := s.m.Generate(rand.New(rand.NewPCG(seed, seed)), c.GenCount, markov.GenerateOptions{
+	names, err := generateFrom(models, c.GenCount, markov.GenerateOptions{
 		MinLen:      c.GenMinLen,
 		MaxLen:      c.GenMaxLen,
 		Temperature: c.GenTemp,
 		Order:       c.GenOrder,
 		AllowKnown:  c.AllowKnown,
-		Progress:    func(found int) { p.done.Store(int64(found)) },
-	})
+	}, orRandom(c.Seed), func(found int) { p.done.Store(int64(found)) })
 	elapsed := p.end(err == nil)
 	if err != nil {
 		return err
@@ -295,10 +336,18 @@ func (s *session) generate() error {
 }
 
 func (s *session) info() error {
-	if ok, err := s.model(); !ok {
+	own, err := s.loadQuiet()
+	if err != nil {
 		return err
 	}
-	describeModel(s.out, s.cfg.ModelFile, s.m)
+	fmt.Fprintln(s.out, "Own knowledge")
+	if own == nil {
+		fmt.Fprintln(s.out, "  Nothing learned yet. Choose 1 - Training to teach it.")
+	} else {
+		describeModel(s.out, s.cfg.ModelFile, own)
+	}
+	fmt.Fprintln(s.out, "Claude knowledge (built in)")
+	describeClaude(s.out)
 	return nil
 }
 
@@ -306,7 +355,7 @@ func (s *session) clear() error {
 	if ok, err := s.model(); !ok {
 		return err
 	}
-	answer, err := s.ask(fmt.Sprintf("This erases everything learned (%s usernames) and cannot be undone. Type yes to confirm: ",
+	answer, err := s.ask(fmt.Sprintf("This erases your own knowledge (%s usernames) and cannot be undone. Claude's built-in knowledge stays. Type yes to confirm: ",
 		formatCount(int(s.m.Stats().Names))))
 	if err != nil {
 		return err
@@ -319,7 +368,7 @@ func (s *session) clear() error {
 		return err
 	}
 	s.m = nil
-	fmt.Fprintln(s.out, "All knowledge cleared.")
+	fmt.Fprintln(s.out, "Own knowledge cleared.")
 	return nil
 }
 

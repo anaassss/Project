@@ -8,17 +8,19 @@
 //   - Normal (social and gaming): SilentWolf, itsmike, sarahbakes, mike_92,
 //     TheNightOwl, xXDragonSlayerXx, NovaTV
 //
-// Training on these teaches a model the structure of each style, so it can
-// then edit and generate usernames in it.
+// Models returns this knowledge as ready-made models, one per style, which
+// usergen uses as Claude's knowledge alongside whatever the user trains.
 package knowledge
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"math/rand/v2"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -193,4 +195,41 @@ func Write(w io.Writer, styles []Style, perStyle int, seed uint64) error {
 		}
 	}
 	return bw.Flush()
+}
+
+const (
+	// PerStyle is how many usernames of each style Models learns: enough
+	// to cover the name and word lists many times over.
+	PerStyle = 100_000
+	// Seed fixes the usernames Models learns, so its models never change.
+	Seed  = 1
+	order = 3
+)
+
+var (
+	modelsOnce sync.Once
+	models     []*markov.Model
+)
+
+// Models returns the built-in knowledge as one model per style, in the
+// order of Styles. They are built on first use, in a fraction of a second,
+// and shared; callers must not train them further.
+func Models() []*markov.Model {
+	modelsOnce.Do(func() {
+		for _, s := range Styles {
+			var buf bytes.Buffer
+			if err := Write(&buf, []Style{s}, PerStyle, Seed); err != nil {
+				panic(err) // writing to memory can't fail
+			}
+			m, err := markov.New(order)
+			if err != nil {
+				panic(err)
+			}
+			if _, err := m.LearnFrom(&buf, nil); err != nil {
+				panic(err)
+			}
+			models = append(models, m)
+		}
+	})
+	return models
 }

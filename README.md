@@ -1,95 +1,100 @@
 # usergen
 
-Learns how usernames are built, then edits usernames you give it into new
-ones using what it learned. It comes with built-in knowledge of how real
-email-style and social/gaming usernames are made, can learn from your own
-lists too, and handles millions of usernames in seconds by using every CPU
-core.
+Edits usernames you give it into new ones, and makes new ones from scratch,
+using two kinds of knowledge:
+
+- **Own knowledge**, which you teach it by training on your own lists of
+  usernames.
+- **Claude knowledge**, built in: how real email-style and social/gaming
+  usernames are made. It is always there, and never mixes with yours.
+
+It handles millions of usernames in seconds by using every CPU core.
 
 ```sh
 go build -o usergen .
-./usergen        # then 7 - Learn built-in knowledge, and 2 - Edit
+./usergen
 ```
 
 ```
-  1 - Training
+  1 - Training (your own knowledge)
   2 - Edit
   3 - Generate
-  4 - Model info
+  4 - Knowledge info
   5 - Settings
-  6 - Clear all knowledge
-  7 - Learn built-in knowledge
+  6 - Clear own knowledge
   0 - Exit
-> 7
-Which knowledge?
-  1 - Email-style usernames   (john.smith, jsmith92, smith.j)
-  2 - Normal usernames        (SilentWolf, itsmike, xXDragonSlayerXx)
-  3 - Both
-  0 - Back
-> 1
-Training [██████████████████████████████] 100%
-Learned 78,301 new usernames in 97ms (skipped 21,699 already known, 0 garbage)
-
-> 1
-File: names.txt
-Training [██████████████████████████████] 100%
-Learned 1,001,559 new usernames in 1.5s (skipped 898,193 already known, 100,248 garbage)
-
 > 2
-Shortest length (3-24) [3]: 8
-Longest length (8-24) [24]: 12
+Shortest length (3-24) [3]: 6
+Longest length (6-24) [24]: 14
+Which knowledge?
+  1 - Own
+  2 - Claude
+  3 - Both
+Choose 1-3 [3]: 2
+Edits per username (1-1000, or max) [10]: 4
 File: mine.txt
 Editing  [██████████████████████████████] 100%
-Saved 2,784,132 edited usernames (8-12 characters) to edited_2784132.txt in 5.6s
-
-> 4
-  Model file   usergen.model (8.7 MB)
-  Usernames    1,001,559 learned, 6-24 characters (average 12.9)
-  Patterns     105,964, using 3 characters of context
-  Words        228; most common: xx, man, code, owl, star, shadow, starter, sneaky, titan, ghostly
-  Numbers      106; most common: 69, 88, 99, 53, 22, 26, 74, 77, 27, 72
-
-> 6
-This erases everything learned (1,001,559 usernames) and cannot be undone. Type yes to confirm: yes
-All knowledge cleared.
+Saved 22 edited usernames (6-14 characters) to edited_22.txt in 33ms
 ```
 
-1. **Training** learns from a file of usernames (one per line) and saves what
-   it learned to `usergen.model`. Each run adds to the model rather than
+`mine.txt` held `john.smith`, `maria.garcia92`, `jsmith`, `SilentWolf`,
+`itsmike` and `xXShadowXx`; `edited_22.txt` holds `ford.smith`,
+`john.smith1990`, `ramos.garcia92`, `jsmith96`, `SilentSteel`, `ArtistWolf`,
+`itsmike_art`, `xXShadowIron` and so on.
+
+1. **Training** learns from a file of usernames (one per line) into your own
+   knowledge, saved in `usergen.model`. Each run adds to it rather than
    starting over.
-2. **Edit** asks for the shortest and longest length you want (Enter keeps
-   the last ones used), then turns every username in a file into up to 10
-   new ones of that length and saves them to `edited_<count>.txt`.
-3. **Generate** makes brand-new usernames from scratch and saves them to
-   `generated_<count>.txt`, showing the first few.
-4. **Model info** shows what the model has learned: how many usernames,
-   patterns, words and numbers, and the most common ones.
+2. **Edit** asks, in order: the shortest and longest length; which
+   knowledge (own, Claude's, or both); and how many edits per username, as a
+   number or `max`. Then it asks for the file, edits every username in it,
+   and saves the edits to `edited_<count>.txt`. Pressing Enter keeps the
+   answer in brackets, which is always your last one.
+3. **Generate** asks which knowledge, then makes brand-new usernames and
+   saves them to `generated_<count>.txt`, showing the first few.
+4. **Knowledge info** shows what both knowledges contain.
 5. **Settings** changes how the other options work (below).
-6. **Clear all knowledge** deletes the model after you type `yes`, so the
-   next training starts from nothing.
-7. **Learn built-in knowledge** teaches the model how real usernames are
-   made (below), in the style you choose.
+6. **Clear own knowledge** deletes your own knowledge after you type `yes`.
+   Claude's built-in knowledge stays.
 
-## Built-in knowledge
+`max` makes every edit the knowledge allows: every learned word or number
+swapped into every part of the name, plus whatever the model can write. That
+is often hundreds per username, so a large file can produce a very large
+result.
 
-usergen doesn't ship anyone's real usernames. Instead it knows the patterns
-real accounts follow and generates 100,000 usernames per style from them,
-using about 200 common first names and 200 last names from many countries,
-and a few hundred everyday words:
+## Claude knowledge
+
+Rather than a list of anyone's real accounts, it is the patterns real
+usernames follow, combined with about 200 common first names and 200 last
+names from many countries and a few hundred everyday words. It is learned
+from 100,000 usernames of each style, built in a fraction of a second when
+first needed:
 
 | Style | Patterns | Examples |
 |-------|----------|----------|
 | Email | first.last, firstlast, flast, f.last, firstl, last.first, first.m.last, and those with birth years or numbers | `john.smith`, `jsmith`, `neha.walker72`, `lnguyen1982`, `gpark007` |
 | Normal | AdjectiveNoun, NounNoun, name + number, its/real/the + name, name + hobby, xX…Xx, TheNoun, channel names | `SilentWolf`, `itsmike`, `sarahbakes`, `mike_92`, `xXShadowXx`, `HyperHD` |
 
-Pick the style that matches the usernames you'll edit: with **Both**, words
-from one style get swapped into the other (`maria.samurai`). To start over
-with only built-in knowledge, choose 6 - Clear all knowledge, then 7.
+You don't choose a style: each username is edited with whichever knowledge
+knows its words best, so `john.smith` gets email-style edits and
+`SilentWolf` gets gaming ones. With **Both**, your own knowledge joins in on
+the same terms.
+
+```
+> 4
+Own knowledge
+  Nothing learned yet. Choose 1 - Training to teach it.
+Claude knowledge (built in)
+  Email-style  78,301 usernames, 401 words; most common: carter, taylor, morgan, thomas, gordon, becker
+  Normal       71,200 usernames, 505 words; most common: xx, the, pixel, pirate, orbit, rain
+```
 
 ## Settings
 
-Choose a number to change a setting; on/off settings flip straight away.
-Settings are saved to `usergen.settings.json` and remembered next time.
+Choose a number to change a setting; on/off settings flip straight away, and
+Knowledge cycles through own, claude and both. Settings are saved to
+`usergen.settings.json` and remembered next time; Edit's and Generate's
+answers update them too.
 
 ```
 Settings (saved in usergen.settings.json)
@@ -98,7 +103,7 @@ Settings (saved in usergen.settings.json)
     2  Save rejected usernames to a file              off
     3  Dry run: learn nothing, just report            off
   Edit
-    4  Edits per username                             10
+    4  Edits per username (1-1000, or max)            10
     5  Shortest length (3-24)                         3
     6  Longest length (3-24)                          24
   Generate
@@ -108,16 +113,17 @@ Settings (saved in usergen.settings.json)
    10  Creativity (1 = as learned, higher = wilder)   1
    11  Context length (0 = the model's)               0
   Edit and Generate
-   12  Allow usernames the model learned from         off
-   13  Seed (0 = random each time)                    0
-  Model
-   14  Model file                                     usergen.model
+   12  Knowledge (own, claude or both)                both
+   13  Allow usernames the knowledge learned from     off
+   14  Seed (0 = random each time)                    0
+  Own knowledge
+   15  File                                           usergen.model
     0  Back
 ```
 
 - **Context length** is how many previous characters the model looks at.
-  It is fixed when a model is created, so a change applies after Clear all
-  knowledge. For Generate, a lower value than the model's gives wilder names.
+  It is fixed when your own knowledge is created, so a change applies after
+  Clear own knowledge. For Generate, a lower value than the model's gives wilder names.
 - **Save rejected usernames** writes each garbage username skipped during
   training, with the reason, to `rejected_<count>.txt`.
 - **Dry run** shows what training would learn without saving anything. While
@@ -132,12 +138,14 @@ Measured on a 4-core machine; more cores are faster.
 | Task | Input | Time |
 |------|-------|------|
 | Training | 2,000,000 lines | 1.5 s |
-| Edit | 1,000,000 usernames → 6.2M edits | 5 s |
-| Edit, 8-12 characters | 1,000,000 usernames → 2.8M edits | 5.6 s |
+| Edit, own knowledge | 1,000,000 usernames → 6.0M edits | 6.0 s |
+| Edit, Claude knowledge | 1,000,000 usernames → 4.9M edits | 5.5 s |
+| Edit, both | 1,000,000 usernames → 6.1M edits | 7.1 s |
 
 Training checks and deduplicates names in file order, then counts patterns on
 every core. Editing splits the input across every core and writes results in
-input order. For a given seed and model, the output is identical on every run.
+input order. For a given seed and knowledge, the output is identical on
+every run.
 
 ## How it edits
 
@@ -165,7 +173,7 @@ Words are learned only from usernames that show where words start and end
 (`Fr0zen`) aren't taken for words.
 
 The saved file has one username per line with no duplicates. It leaves out
-the usernames you gave it and names the model learned from. It is never
+the usernames you gave it and names any knowledge in use learned from. It is never
 overwritten: if `edited_30.txt` exists, the next one is `edited_30_2.txt`.
 
 ## Garbage filtering
@@ -195,28 +203,29 @@ wherever they run. Progress bars are drawn only when output goes to a
 terminal.
 
 ```sh
-./usergen builtin -style email              # or normal, or both; -n per style
-./usergen train names.txt more.txt          # or - for stdin
+./usergen train names.txt more.txt          # own knowledge; or - for stdin
 ./usergen train -dry-run -show-rejected names.txt
-./usergen edit mine.txt
+./usergen edit mine.txt                     # both knowledges, 10 edits each
+./usergen edit -knowledge claude -edits max mine.txt
 ./usergen edit -min 8 -max 12 -edits 5 -seed 42 mine.txt
-./usergen generate -n 20                    # brand-new usernames from scratch
-./usergen stats
+./usergen generate -n 20 -knowledge claude  # brand-new usernames from scratch
+./usergen stats                             # your own knowledge
 ```
 
 | Flag | Command | Meaning |
 |------|---------|---------|
-| `-model` | all | model file (default `usergen.model`) |
+| `-model` | all | your own knowledge's file (default `usergen.model`) |
 | `-order` | train | characters of context for a **new** model (default 3) |
 | `-show-rejected` | train | print each garbage username skipped and why |
 | `-dry-run` | train | report what would be learned without saving |
-| `-edits` | edit | most edits per username (default 10) |
+| `-knowledge` | edit, generate | `own`, `claude` or `both` (default `both`; without own knowledge, both uses Claude's) |
+| `-edits` | edit | most edits per username, or `max` (default 10) |
 | `-min`, `-max` | edit | shortest and longest edit in characters (default 3-24) |
 | `-seed` | edit, generate | fixed seed for repeatable output (0 = random) |
-| `-allow-known` | edit, generate | allow names the model learned from |
+| `-allow-known` | edit, generate | allow names the knowledge learned from |
 | `-n`, `-min`, `-max`, `-temp`, `-order` | generate | count, shortest and longest length, creativity, context |
 
-## Model file
+## Own knowledge file
 
 `usergen.model` is binary so millions of usernames save and load quickly. It
 holds the character patterns, the learned words and numbers, and a 64-bit

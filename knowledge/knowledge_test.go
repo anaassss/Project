@@ -98,3 +98,26 @@ func TestParseStyle(t *testing.T) {
 		t.Error("ParseStyle accepted an unknown style")
 	}
 }
+
+func TestModels(t *testing.T) {
+	ms := Models()
+	if len(ms) != len(Styles) {
+		t.Fatalf("got %d models, want %d", len(ms), len(Styles))
+	}
+	if again := Models(); again[0] != ms[0] {
+		t.Error("Models rebuilt its models")
+	}
+	email, normal := ms[0], ms[1]
+	for _, c := range []struct {
+		m    *markov.Model
+		word string
+		want bool
+	}{
+		{email, "smith", true}, {email, "garcia", true}, {email, "panda", false},
+		{normal, "panda", true}, {normal, "silent", true}, {normal, "garcia", false},
+	} {
+		if got := c.m.KnowsWord(c.word); got != c.want {
+			t.Errorf("model knows %q = %v, want %v", c.word, got, c.want)
+		}
+	}
+}

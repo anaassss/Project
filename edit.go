@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/anaassss/Project/edit"
@@ -27,7 +28,8 @@ const (
 func editCommand(args []string) error {
 	flags := flag.NewFlagSet("edit", flag.ExitOnError)
 	modelPath := flags.String("model", defaultModel, "model file to edit with")
-	maxEdits := flags.Int("edits", defaultMaxEdits, "most edits per username; the model may find fewer")
+	edits := flags.String("edits", strconv.Itoa(defaultMaxEdits), "most edits per username, or max for every edit the knowledge allows")
+	know := flags.String("knowledge", bothKnowledge, "knowledge to edit with: own, claude or both")
 	minLen := flags.Int("min", markov.MinNameLen, "shortest edit, in characters")
 	maxLen := flags.Int("max", markov.MaxNameLen, "longest edit, in characters")
 	seed := flags.Uint64("seed", 0, "random seed for repeatable output (0 = random)")
@@ -37,12 +39,23 @@ func editCommand(args []string) error {
 		return errors.New("edit needs exactly one file of usernames")
 	}
 
-	m, err := loadModel(*modelPath)
+	perName, err := parseEdits(*edits)
+	if err != nil {
+		return fmt.Errorf("-edits: %w", err)
+	}
+	own, err := ownOrNil(*modelPath)
 	if err != nil {
 		return err
 	}
-	opts := edit.Options{Max: *maxEdits, AllowKnown: *allowKnown, MinLen: *minLen, MaxLen: *maxLen}
-	summary, err := editFile(m, flags.Arg(0), opts, *seed, ".", terminalOrNil(os.Stderr))
+	models, note, err := knowledgeFor(*know, own)
+	if err != nil {
+		return err
+	}
+	if note != "" {
+		fmt.Fprintln(os.Stderr, note)
+	}
+	opts := edit.Options{Max: perName, AllowKnown: *allowKnown, MinLen: *minLen, MaxLen: *maxLen}
+	summary, err := editFile(models, flags.Arg(0), opts, *seed, ".", terminalOrNil(os.Stderr))
 	if err != nil {
 		return err
 	}
@@ -53,14 +66,14 @@ func editCommand(args []string) error {
 // editFile edits every username in path and saves the edits, one per line,
 // to edited_<count>.txt in dir, drawing a progress bar on bar (nil for none).
 // It returns a one-line summary.
-func editFile(m *markov.Model, path string, opts edit.Options, seed uint64, dir string, bar io.Writer) (string, error) {
+func editFile(models []*markov.Model, path string, opts edit.Options, seed uint64, dir string, bar io.Writer) (string, error) {
 	if opts.MinLen == 0 {
 		opts.MinLen = markov.MinNameLen
 	}
 	if opts.MaxLen == 0 {
 		opts.MaxLen = markov.MaxNameLen
 	}
-	e, err := edit.New(m, opts)
+	e, err := edit.New(models, opts)
 	if err != nil {
 		return "", err
 	}

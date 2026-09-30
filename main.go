@@ -29,7 +29,6 @@ const usage = `usergen learns how usernames are built and edits usernames into n
 Usage:
   usergen                            interactive menu with every feature and its settings
   usergen train    [flags] FILE...   learn from username lists (one per line, "-" for stdin)
-  usergen builtin  [flags]           learn built-in knowledge of how real usernames are made
   usergen edit     [flags] FILE      edit each username in FILE; saves edited_<count>.txt
   usergen generate [flags]           generate new usernames from the saved model
   usergen stats    [flags]           show what the saved model has learned
@@ -52,8 +51,6 @@ func main() {
 	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
 	case "train":
 		err = train(args)
-	case "builtin":
-		err = builtin(args)
 	case "edit":
 		err = editCommand(args)
 	case "generate", "gen":
@@ -111,20 +108,27 @@ func generate(args []string) error {
 	order := flags.Int("order", 0, "characters of context to use, up to the model's order; lower is wilder (0 = model's order)")
 	seed := flags.Uint64("seed", 0, "random seed for repeatable output (0 = random)")
 	allowKnown := flags.Bool("allow-known", false, "allow usernames that appear in the training data")
+	know := flags.String("knowledge", bothKnowledge, "knowledge to generate from: own, claude or both")
 	flags.Parse(args)
 
-	m, err := loadModel(*modelPath)
+	own, err := ownOrNil(*modelPath)
 	if err != nil {
 		return err
 	}
-	s := orRandom(*seed)
-	names, err := m.Generate(rand.New(rand.NewPCG(s, s)), *n, markov.GenerateOptions{
+	models, note, err := knowledgeFor(*know, own)
+	if err != nil {
+		return err
+	}
+	if note != "" {
+		fmt.Fprintln(os.Stderr, note)
+	}
+	names, err := generateFrom(models, *n, markov.GenerateOptions{
 		MinLen:      *minLen,
 		MaxLen:      *maxLen,
 		Temperature: *temp,
 		Order:       *order,
 		AllowKnown:  *allowKnown,
-	})
+	}, orRandom(*seed), nil)
 	if err != nil {
 		return err
 	}

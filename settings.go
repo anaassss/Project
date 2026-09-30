@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -23,7 +24,8 @@ type settings struct {
 	Order        int     `json:"order"` // context length for a new model
 	SaveRejected bool    `json:"save_rejected"`
 	DryRun       bool    `json:"dry_run"`
-	EditsPerName int     `json:"edits_per_username"`
+	EditsPerName int     `json:"edits_per_username"` // 0 means max
+	Knowledge    string  `json:"knowledge"`          // own, claude or both
 	EditMinLen   int     `json:"edit_min_length"`
 	EditMaxLen   int     `json:"edit_max_length"`
 	GenCount     int     `json:"generate_count"`
@@ -40,6 +42,7 @@ func defaultSettings() settings {
 		ModelFile:    defaultModel,
 		Order:        defaultOrder,
 		EditsPerName: defaultMaxEdits,
+		Knowledge:    bothKnowledge,
 		EditMinLen:   markov.MinNameLen,
 		EditMaxLen:   markov.MaxNameLen,
 		GenCount:     10,
@@ -62,15 +65,17 @@ func (c settings) validate() error {
 		return errors.New("model file must not be empty")
 	case c.Order < 1 || c.Order > markov.MaxOrder:
 		return fmt.Errorf("context length must be 1-%d", markov.MaxOrder)
-	case c.EditsPerName < 1 || c.EditsPerName > maxEditsPerName:
-		return fmt.Errorf("edits per username must be 1-%d", maxEditsPerName)
-	case c.EditMinLen < markov.MinNameLen || c.EditMaxLen > markov.MaxNameLen:
+	case c.EditsPerName < 0 || c.EditsPerName > maxEditsPerName:
+		return fmt.Errorf("edits per username must be 1-%d, or max", maxEditsPerName)
+	case !slices.Contains(knowledgeChoices, c.Knowledge):
+		return fmt.Errorf("knowledge must be own, claude or both")
+	case !nameLen(c.EditMinLen) || !nameLen(c.EditMaxLen):
 		return fmt.Errorf("edit lengths must be %d-%d", markov.MinNameLen, markov.MaxNameLen)
 	case c.EditMinLen > c.EditMaxLen:
 		return fmt.Errorf("edit shortest length %d is above longest length %d", c.EditMinLen, c.EditMaxLen)
 	case c.GenCount < 1 || c.GenCount > maxGenCount:
 		return fmt.Errorf("how many usernames must be 1-%s", formatCount(maxGenCount))
-	case c.GenMinLen < markov.MinNameLen || c.GenMaxLen > markov.MaxNameLen:
+	case !nameLen(c.GenMinLen) || !nameLen(c.GenMaxLen):
 		return fmt.Errorf("generate lengths must be %d-%d", markov.MinNameLen, markov.MaxNameLen)
 	case c.GenMinLen > c.GenMaxLen:
 		return fmt.Errorf("generate shortest length %d is above longest length %d", c.GenMinLen, c.GenMaxLen)
@@ -81,6 +86,9 @@ func (c settings) validate() error {
 	}
 	return nil
 }
+
+// nameLen reports whether n is a length the garbage filter allows.
+func nameLen(n int) bool { return n >= markov.MinNameLen && n <= markov.MaxNameLen }
 
 // loadSettings reads path, returning the defaults if it does not exist.
 // Settings missing from the file keep their defaults.
@@ -174,7 +182,19 @@ var options = []option{
 	intOption("Training", "Context length for a new model (1-8)", func(c *settings) *int { return &c.Order }),
 	boolOption("Training", "Save rejected usernames to a file", func(c *settings) *bool { return &c.SaveRejected }),
 	boolOption("Training", "Dry run: learn nothing, just report", func(c *settings) *bool { return &c.DryRun }),
-	intOption("Edit", "Edits per username", func(c *settings) *int { return &c.EditsPerName }),
+	{
+		group: "Edit",
+		label: "Edits per username (1-1000, or max)",
+		show:  func(c *settings) string { return editsLabel(c.EditsPerName) },
+		set: func(c *settings, v string) error {
+			n, err := parseEdits(v)
+			if err != nil {
+				return err
+			}
+			c.EditsPerName = n
+			return nil
+		},
+	},
 	intOption("Edit", "Shortest length (3-24)", func(c *settings) *int { return &c.EditMinLen }),
 	intOption("Edit", "Longest length (3-24)", func(c *settings) *int { return &c.EditMaxLen }),
 	intOption("Generate", "How many usernames", func(c *settings) *int { return &c.GenCount }),
@@ -194,7 +214,17 @@ var options = []option{
 		},
 	},
 	intOption("Generate", "Context length (0 = the model's)", func(c *settings) *int { return &c.GenOrder }),
-	boolOption("Edit and Generate", "Allow usernames the model learned from", func(c *settings) *bool { return &c.AllowKnown }),
+	{
+		group: "Edit and Generate",
+		label: "Knowledge (own, claude or both)",
+		show:  func(c *settings) string { return c.Knowledge },
+		// Choosing it cycles own → claude → both.
+		flip: func(c *settings) {
+			i := slices.Index(knowledgeChoices, c.Knowledge)
+			c.Knowledge = knowledgeChoices[(i+1)%len(knowledgeChoices)]
+		},
+	},
+	boolOption("Edit and Generate", "Allow usernames the knowledge learned from", func(c *settings) *bool { return &c.AllowKnown }),
 	{
 		group: "Edit and Generate",
 		label: "Seed (0 = random each time)",
@@ -209,8 +239,8 @@ var options = []option{
 		},
 	},
 	{
-		group: "Model",
-		label: "Model file",
+		group: "Own knowledge",
+		label: "File",
 		show:  func(c *settings) string { return c.ModelFile },
 		set: func(c *settings, v string) error {
 			c.ModelFile = cleanPath(v)

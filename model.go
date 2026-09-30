@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/anaassss/Project/knowledge"
 	"github.com/anaassss/Project/markov"
 )
 
@@ -71,4 +75,114 @@ func clearModel(path string) error {
 		}
 	}
 	return nil
+}
+
+// Knowledge choices for Edit and Generate.
+const (
+	ownKnowledge    = "own"
+	claudeKnowledge = "claude"
+	bothKnowledge   = "both"
+)
+
+var knowledgeChoices = []string{ownKnowledge, claudeKnowledge, bothKnowledge}
+
+var errNoOwnKnowledge = errors.New("you haven't trained your own knowledge yet")
+
+// knowledgeFor returns the models to use for choice, given the user's own
+// model (nil if nothing is trained). For both without own knowledge it
+// uses Claude's alone and returns a note saying so.
+func knowledgeFor(choice string, own *markov.Model) ([]*markov.Model, string, error) {
+	switch choice {
+	case ownKnowledge:
+		if own == nil {
+			return nil, "", errNoOwnKnowledge
+		}
+		return []*markov.Model{own}, "", nil
+	case claudeKnowledge:
+		return knowledge.Models(), "", nil
+	case bothKnowledge:
+		if own == nil {
+			return knowledge.Models(), "No own knowledge yet, so using Claude's.", nil
+		}
+		return append([]*markov.Model{own}, knowledge.Models()...), "", nil
+	}
+	return nil, "", fmt.Errorf("unknown knowledge %q: use own, claude or both", choice)
+}
+
+// ownOrNil loads the user's model, or returns nil if nothing is trained.
+func ownOrNil(path string) (*markov.Model, error) {
+	m, err := loadModel(path)
+	if errors.Is(err, errNoModel) {
+		return nil, nil
+	}
+	return m, err
+}
+
+// parseEdits reads edits per username: a number from 1 to maxEditsPerName,
+// or "max" for every edit the knowledge allows, returned as 0.
+func parseEdits(s string) (int, error) {
+	if strings.EqualFold(s, "max") {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(strings.ReplaceAll(s, ",", ""))
+	if err != nil || n < 1 || n > maxEditsPerName {
+		return 0, fmt.Errorf("enter a number from 1 to %d, or max", maxEditsPerName)
+	}
+	return n, nil
+}
+
+func editsLabel(n int) string {
+	if n == 0 {
+		return "max"
+	}
+	return strconv.Itoa(n)
+}
+
+// describeClaude prints what Claude's built-in knowledge contains.
+func describeClaude(w io.Writer) {
+	for i, m := range knowledge.Models() {
+		label := "Email-style"
+		if knowledge.Styles[i] == knowledge.Normal {
+			label = "Normal"
+		}
+		words, _ := m.Vocabulary()
+		fmt.Fprintf(w, "  %-12s %s usernames, %s words%s\n", label,
+			formatCount(int(m.Stats().Names)), formatCount(words), mostCommonList(m.TopWords(6)))
+	}
+}
+
+// generateFrom generates up to count distinct usernames, sharing the count
+// between models. progress, if non-nil, is called with the total found.
+func generateFrom(models []*markov.Model, count int, opts markov.GenerateOptions, seed uint64, progress func(int)) ([]string, error) {
+	rng := rand.New(rand.NewPCG(seed, seed))
+	var names []string
+	seen := map[uint64]bool{}
+	for i, m := range models {
+		n := count / len(models)
+		if i < count%len(models) {
+			n++
+		}
+		if n == 0 {
+			continue
+		}
+		o := opts
+		o.Order = min(o.Order, m.Order())
+		base := len(names)
+		if progress != nil {
+			o.Progress = func(found int) { progress(base + found) }
+		}
+		got, err := m.Generate(rng, n, o)
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range got {
+			h := markov.FoldHash(name)
+			known := !opts.AllowKnown && slices.ContainsFunc(models, func(m *markov.Model) bool { return m.KnowsHash(h) })
+			if !seen[h] && !known {
+				seen[h] = true
+				names = append(names, name)
+			}
+		}
+	}
+	return names, nil
 }

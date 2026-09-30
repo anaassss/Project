@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/anaassss/Project/knowledge"
+	"github.com/anaassss/Project/markov"
 )
 
 // repoRoot is the package directory, captured before tests change directory.
@@ -31,46 +34,73 @@ func readLines(t *testing.T, path string) []string {
 	return strings.Fields(string(data))
 }
 
-func TestMenuTrainThenEdit(t *testing.T) {
+// trainedDir changes to a temporary directory holding the test usernames as
+// names.txt.
+func trainedDir(t *testing.T) {
+	t.Helper()
 	t.Chdir(t.TempDir())
 	train, err := os.ReadFile(filepath.Join(repoRoot, "testdata", "usernames.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, "names.txt", string(train))
-	writeFile(t, "to edit.txt", "ShadowFox\nDarkWolf_7\nshadowfox\n")
+}
 
-	input := strings.Join([]string{
-		"2",              // edit before training: refused
-		"1", "names.txt", // train
-		"1", "names.txt", // train again: all already known
-		"2", "", "", `to\ edit.txt`, // edit with the default lengths
-		"0",
-	}, "\n") + "\n"
+func runMenu(t *testing.T, answers ...string) string {
+	t.Helper()
 	var out strings.Builder
-	if err := menu(strings.NewReader(input), &out, settingsFile); err != nil {
+	if err := menu(strings.NewReader(strings.Join(answers, "\n")+"\n"), &out, settingsFile); err != nil {
 		t.Fatal(err)
 	}
-	got := out.String()
-	for _, want := range []string{
-		"Nothing learned yet",
-		"Training [██████████████████████████████] 100%",
-		"Learned 155 new usernames in ",
-		"Learned 0 new usernames in ",
-		"(skipped 155 already known, 0 garbage)",
-		"Editing  [██████████████████████████████] 100%",
-	} {
+	return out.String()
+}
+
+func mustContain(t *testing.T, got string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
 		if !strings.Contains(got, want) {
-			t.Errorf("menu output missing %q:\n%s", want, got)
+			t.Errorf("output missing %q:\n%s", want, got)
 		}
 	}
+}
 
+func mustGlob(t *testing.T, pattern string) string {
+	t.Helper()
+	files, _ := filepath.Glob(pattern)
+	if len(files) != 1 {
+		t.Fatalf("%s matched %v", pattern, files)
+	}
+	return files[0]
+}
+
+// editedFile returns the lines of the one edited_*.txt file.
+func editedFile(t *testing.T) []string {
+	t.Helper()
+	return readLines(t, mustGlob(t, "edited_*.txt"))
+}
+
+func TestMenuTrainThenEditOwn(t *testing.T) {
+	trainedDir(t)
+	writeFile(t, "to edit.txt", "ShadowFox\nDarkWolf_7\nshadowfox\n")
+	got := runMenu(t,
+		"1", "names.txt", // train
+		"1", "names.txt", // train again: all already known
+		"2", "", "", "1", "", `to\ edit.txt`, // edit with own knowledge, defaults otherwise
+		"0",
+	)
+	mustContain(t, got,
+		"1 - Training (your own knowledge)",
+		"Training [██████████████████████████████] 100%",
+		"Learned 155 new usernames in ",
+		"(skipped 155 already known, 0 garbage)",
+		"Which knowledge?\n  1 - Own\n  2 - Claude\n  3 - Both\n",
+		"Choose 1-3 [3]: ",
+		"Edits per username (1-1000, or max) [10]: ",
+		"Editing  [██████████████████████████████] 100%",
+	)
 	saved := regexp.MustCompile(`Saved (\d+) edited usernames \(3-24 characters\) to (edited_\d+\.txt) in `).FindStringSubmatch(got)
 	if saved == nil {
 		t.Fatalf("no edits saved:\n%s", got)
-	}
-	if want := "edited_" + saved[1] + ".txt"; saved[2] != want {
-		t.Errorf("saved to %s, want %s", saved[2], want)
 	}
 	edits := readLines(t, saved[2])
 	if len(edits) == 0 || len(edits) > 20 {
@@ -81,20 +111,257 @@ func TestMenuTrainThenEdit(t *testing.T) {
 			t.Errorf("edited file contains input name %q", ed)
 		}
 	}
-	if _, err := os.Stat(defaultModel); err != nil {
-		t.Errorf("model not saved: %v", err)
+	if c, _ := loadSettings(settingsFile); c.Knowledge != ownKnowledge {
+		t.Errorf("knowledge choice not remembered: %q", c.Knowledge)
+	}
+}
+
+func TestMenuEditClaudeAndMax(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeFile(t, "mine.txt", "john.smith\nSilentWolf\n")
+	got := runMenu(t,
+		"2", "", "",
+		"1",      // own: nothing trained yet, so refused
+		"4", "2", // invalid, then Claude
+		"abc", "max", // edits: invalid, then max
+		"mine.txt",
+		"0",
+	)
+	mustContain(t, got,
+		"You haven't trained your own knowledge yet",
+		"Choose 1, 2 or 3.",
+		"Enter a number from 1 to 1000, or max.",
+		"max makes every edit the knowledge allows",
+	)
+	edits := editedFile(t)
+	if len(edits) < 100 {
+		t.Errorf("max gave only %d edits for 2 names", len(edits))
+	}
+	var email, gaming int
+	for _, ed := range edits {
+		switch {
+		case strings.HasPrefix(ed, "john.") || strings.HasSuffix(ed, ".smith"):
+			email++
+			if ed != strings.ToLower(ed) {
+				t.Errorf("email-style edit %q isn't lowercase", ed)
+			}
+		case strings.HasPrefix(ed, "Silent") || strings.HasSuffix(ed, "Wolf"):
+			gaming++
+		}
+	}
+	if email < 20 || gaming < 20 {
+		t.Errorf("edits don't cover both names: %d email-style, %d gaming", email, gaming)
+	}
+	c, _ := loadSettings(settingsFile)
+	if c.Knowledge != claudeKnowledge || c.EditsPerName != 0 {
+		t.Errorf("choices not remembered: knowledge %q, edits %d", c.Knowledge, c.EditsPerName)
+	}
+
+	// Next time, Enter keeps Claude and max.
+	os.Remove(mustGlob(t, "edited_*.txt"))
+	got = runMenu(t, "2", "", "", "", "", "mine.txt", "0")
+	mustContain(t, got, "Choose 1-3 [2]: ", "or max) [max]: ")
+	if n := len(editedFile(t)); n == 0 {
+		t.Error("repeat with the saved choices gave no edits")
+	}
+}
+
+func TestMenuBothWithoutOwnUsesClaude(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeFile(t, "mine.txt", "maria.garcia\n")
+	got := runMenu(t, "2", "", "", "3", "5", "mine.txt", "0")
+	mustContain(t, got, "No own knowledge yet, so using Claude's.", "Saved ")
+	if n := len(editedFile(t)); n == 0 || n > 5 {
+		t.Errorf("got %d edits, want 1-5", n)
 	}
 }
 
 func TestMenuSurvivesErrorsAndEOF(t *testing.T) {
 	t.Chdir(t.TempDir())
-	var out strings.Builder
 	// A missing file is reported and the menu continues; input then ends.
-	if err := menu(strings.NewReader("1\nmissing.txt\n9\n"), &out, settingsFile); err != nil {
+	got := runMenu(t, "1", "missing.txt", "9")
+	mustContain(t, got, "Error: stat missing.txt", "Choose 1-6, or 0 to exit.")
+}
+
+func TestMenuInfoAndClear(t *testing.T) {
+	trainedDir(t)
+	writeFile(t, legacyModel, `{"version":1,"order":3,"names":["OldName"]}`)
+	got := runMenu(t,
+		"1", "names.txt", // train (loads the old model, saves the new one)
+		"4",       // info
+		"6", "no", // clear, refused
+		"6", "YES", // clear, confirmed
+		"4", // info: own knowledge gone, Claude's remains
+		"0",
+	)
+	mustContain(t, got,
+		"Own knowledge\n  Model file   usergen.model (",
+		"Usernames    156 learned, 3-15 characters",
+		"most common: wolf,",
+		"Claude knowledge (built in)\n  Email-style  ",
+		"  Normal       ",
+		"(156 usernames) and cannot be undone. Claude's built-in knowledge stays.",
+		"Nothing cleared.",
+		"Own knowledge cleared.",
+		"Own knowledge\n  Nothing learned yet. Choose 1 - Training to teach it.",
+	)
+	for _, f := range []string{defaultModel, legacyModel} {
+		if _, err := os.Stat(f); err == nil {
+			t.Errorf("%s still exists after clearing", f)
+		}
+	}
+}
+
+func TestMenuEditAsksLengths(t *testing.T) {
+	trainedDir(t)
+	writeFile(t, "mine.txt", "ShadowFox\nDarkWolf_7\nStormHawk99\nMysticPanda\n")
+	got := runMenu(t,
+		"1", "names.txt",
+		"2",
+		"2", "abc", "6", // shortest: out of range, not a number, then 6
+		"5", "10", // longest: below the shortest, then 10
+		"1", "", "mine.txt",
+		"0",
+	)
+	mustContain(t, got,
+		"Shortest length (3-24) [3]: ",
+		"Enter a whole number from 3 to 24.",
+		"Longest length (6-24) [24]: ",
+		"Enter a whole number from 6 to 24.",
+		"edited usernames (6-10 characters) to edited_",
+	)
+	for _, ed := range editedFile(t) {
+		if n := len([]rune(ed)); n < 6 || n > 10 {
+			t.Errorf("edit %q has %d characters, want 6-10", ed, n)
+		}
+	}
+	if c, _ := loadSettings(settingsFile); c.EditMinLen != 6 || c.EditMaxLen != 10 {
+		t.Errorf("lengths not remembered: %d-%d", c.EditMinLen, c.EditMaxLen)
+	}
+}
+
+func TestMenuSettingsApply(t *testing.T) {
+	trainedDir(t)
+	writeFile(t, "mine.txt", "ShadowFox\nDarkWolf_7\nStormHawk99\n")
+	got := runMenu(t,
+		"5",             // settings
+		"4", "abc", "3", // edits per username: invalid, then 3
+		"9", "2", // generate longest length 2: out of range
+		"8", "20", // generate shortest 20 > longest 16: refused
+		"7", "7", // generate 7 usernames
+		"12",       // knowledge: both → own
+		"14", "42", // seed
+		"15", "other.model", // own knowledge file
+		"0",
+		"1", "names.txt", // train into other.model
+		"2", "", "", "", "", "mine.txt", // edit with the saved choices
+		"3", "", // generate with the saved knowledge
+		"0",
+	)
+	mustContain(t, got,
+		"Enter a number from 1 to 1000, or max.",
+		"Not changed: generate lengths must be 3-24.",
+		"Not changed: generate shortest length 20 is above longest length 16.",
+		"   12  Knowledge (own, claude or both)                own",
+		"   15  File                                           other.model",
+		"Saved 7 new usernames to generated_7.txt",
+	)
+	if _, err := os.Stat("other.model"); err != nil {
+		t.Errorf("training ignored the file setting: %v", err)
+	}
+	if n := len(editedFile(t)); n == 0 || n > 9 {
+		t.Errorf("%d edits for 3 names at 3 per name, want 1-9", n)
+	}
+	if n := len(readLines(t, "generated_7.txt")); n != 7 {
+		t.Errorf("generated_7.txt has %d names, want 7", n)
+	}
+
+	c, err := loadSettings(settingsFile)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); !strings.Contains(got, "Error: stat missing.txt") || !strings.Contains(got, "Choose 1-7, or 0 to exit.") {
-		t.Errorf("unexpected output:\n%s", got)
+	want := defaultSettings()
+	want.EditsPerName, want.GenCount, want.Seed, want.ModelFile, want.Knowledge = 3, 7, 42, "other.model", ownKnowledge
+	if c != want {
+		t.Errorf("saved settings = %+v, want %+v", c, want)
+	}
+	mustContain(t, runMenu(t, "4", "0"), "Model file   other.model")
+}
+
+func TestMenuDryRunAndRejected(t *testing.T) {
+	trainedDir(t)
+	writeFile(t, "messy.txt", "ShadowFox\nasdfghjkl\nuser_123\njohn@mail.com\n")
+	got := runMenu(t,
+		"5", "2", "3", "0", // turn on save rejected and dry run
+		"1", "messy.txt",
+		"4", // info: nothing learned
+		"0",
+	)
+	mustContain(t, got,
+		"1 - Training (your own knowledge)   (dry run is on: nothing will be saved)",
+		"Dry run: would learn 1 new usernames",
+		"Nothing was saved.",
+		"Saved 3 rejected usernames, with reasons, to rejected_3.txt",
+		"Nothing learned yet",
+	)
+	if _, err := os.Stat(defaultModel); err == nil {
+		t.Error("dry run saved a model")
+	}
+	data, _ := os.ReadFile("rejected_3.txt")
+	if want := "asdfghjkl\tkeyboard or alphabet sequence\nuser_123\tplaceholder or auto-generated\njohn@mail.com\tdisallowed character\n"; string(data) != want {
+		t.Errorf("rejected_3.txt = %q, want %q", data, want)
+	}
+	if tmp, _ := filepath.Glob(".rejected-*"); len(tmp) != 0 {
+		t.Errorf("temporary files left behind: %v", tmp)
+	}
+}
+
+func TestEditCommand(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeFile(t, "mine.txt", "john.smith\nSilentWolf\n")
+	if err := editCommand([]string{"-knowledge", "own", "mine.txt"}); err == nil {
+		t.Error("edit with own knowledge succeeded without a trained model")
+	}
+	if err := editCommand([]string{"-edits", "lots", "mine.txt"}); err == nil {
+		t.Error("edit accepted -edits lots")
+	}
+	if err := editCommand([]string{"-knowledge", "claude", "-edits", "4", "-seed", "1", "mine.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(editedFile(t)); n == 0 || n > 8 {
+		t.Errorf("got %d edits for 2 names at 4 per name", n)
+	}
+}
+
+func TestGenerateFrom(t *testing.T) {
+	models := knowledge.Models()
+	opts := markov.GenerateOptions{MinLen: 4, MaxLen: 16, Temperature: 1}
+	names, err := generateFrom(models, 21, opts, 5, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 21 {
+		t.Errorf("got %d names, want 21", len(names))
+	}
+	seen := map[string]bool{}
+	for _, n := range names {
+		if seen[strings.ToLower(n)] || slices.ContainsFunc(models, func(m *markov.Model) bool { return m.Knows(n) }) {
+			t.Errorf("%q is a duplicate or a learned name", n)
+		}
+		seen[strings.ToLower(n)] = true
+	}
+}
+
+func TestParseEdits(t *testing.T) {
+	for in, want := range map[string]int{"1": 1, "10": 10, "1,000": 1000, "max": 0, "MAX": 0} {
+		if got, err := parseEdits(in); err != nil || got != want {
+			t.Errorf("parseEdits(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"0", "-1", "1001", "all", ""} {
+		if _, err := parseEdits(in); err == nil {
+			t.Errorf("parseEdits(%q) succeeded", in)
+		}
 	}
 }
 
@@ -142,52 +409,6 @@ func TestFormatCount(t *testing.T) {
 	}
 }
 
-func TestMenuInfoAndClear(t *testing.T) {
-	t.Chdir(t.TempDir())
-	train, err := os.ReadFile(filepath.Join(repoRoot, "testdata", "usernames.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, "names.txt", string(train))
-	writeFile(t, legacyModel, `{"version":1,"order":3,"names":["OldName"]}`)
-
-	input := strings.Join([]string{
-		"1", "names.txt", // train (loads the old model, saves the new one)
-		"4",       // info
-		"6", "no", // clear, refused
-		"6", "YES", // clear, confirmed
-		"4", // info: nothing left
-		"2", // edit: nothing left
-		"0",
-	}, "\n") + "\n"
-	var out strings.Builder
-	if err := menu(strings.NewReader(input), &out, settingsFile); err != nil {
-		t.Fatal(err)
-	}
-	got := out.String()
-	for _, want := range []string{
-		"Model file   usergen.model (",
-		"Usernames    156 learned, 3-15 characters",
-		"Words        ",
-		"most common: wolf,",
-		"(156 usernames) and cannot be undone",
-		"Nothing cleared.",
-		"All knowledge cleared.",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("menu output missing %q:\n%s", want, got)
-		}
-	}
-	if n := strings.Count(got, "Nothing learned yet"); n != 2 {
-		t.Errorf("after clearing, %d choices said nothing is learned, want 2:\n%s", n, got)
-	}
-	for _, f := range []string{defaultModel, legacyModel} {
-		if _, err := os.Stat(f); err == nil {
-			t.Errorf("%s still exists after clearing", f)
-		}
-	}
-}
-
 func TestFileLabel(t *testing.T) {
 	t.Chdir(t.TempDir())
 	if got := fileLabel(defaultModel); got != defaultModel {
@@ -203,242 +424,25 @@ func TestFileLabel(t *testing.T) {
 	}
 }
 
-// trainedDir changes to a temporary directory holding the example usernames
-// as names.txt.
-func trainedDir(t *testing.T) {
-	t.Helper()
-	t.Chdir(t.TempDir())
-	train, err := os.ReadFile(filepath.Join(repoRoot, "testdata", "usernames.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, "names.txt", string(train))
-}
-
-func runMenu(t *testing.T, answers ...string) string {
-	t.Helper()
-	var out strings.Builder
-	if err := menu(strings.NewReader(strings.Join(answers, "\n")+"\n"), &out, settingsFile); err != nil {
-		t.Fatal(err)
-	}
-	return out.String()
-}
-
-func TestMenuSettingsApply(t *testing.T) {
-	trainedDir(t)
-	writeFile(t, "mine.txt", "ShadowFox\nDarkWolf_7\nStormHawk99\n")
-	got := runMenu(t,
-		"5",             // settings
-		"4", "abc", "3", // edits per username: invalid, then 3
-		"8", "20", // generate shortest length 20 > longest 16: refused
-		"7", "7", // generate 7 usernames
-		"13", "42", // seed
-		"14", "other.model", // model file
-		"0",
-		"1", "names.txt", // train into other.model
-		"2", "", "", "mine.txt", // edit with the default lengths
-		"3", // generate
-		"0",
-	)
-	for _, want := range []string{
-		"Enter a whole number.",
-		"Not changed: generate shortest length 20 is above longest length 16.",
-		"   14  Model file                                     other.model",
-		"Saved 7 new usernames to generated_7.txt",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("menu output missing %q:\n%s", want, got)
-		}
-	}
-	if _, err := os.Stat("other.model"); err != nil {
-		t.Errorf("training ignored the model file setting: %v", err)
-	}
-	edited, _ := filepath.Glob("edited_*.txt")
-	if len(edited) != 1 {
-		t.Fatalf("edited files: %v", edited)
-	}
-	if n := len(readLines(t, edited[0])); n == 0 || n > 9 {
-		t.Errorf("%d edits for 3 names at 3 per name, want 1-9", n)
-	}
-	if n := len(readLines(t, "generated_7.txt")); n != 7 {
-		t.Errorf("generated_7.txt has %d names, want 7", n)
-	}
-
-	// Settings persist, and a new session uses them.
-	c, err := loadSettings(settingsFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := defaultSettings()
-	want.EditsPerName, want.GenCount, want.Seed, want.ModelFile = 3, 7, 42, "other.model"
-	if c != want {
-		t.Errorf("saved settings = %+v, want %+v", c, want)
-	}
-	if got := runMenu(t, "4", "0"); !strings.Contains(got, "Model file   other.model") {
-		t.Errorf("new session did not use saved model file:\n%s", got)
-	}
-}
-
-func TestMenuDryRunAndRejected(t *testing.T) {
-	trainedDir(t)
-	writeFile(t, "messy.txt", "ShadowFox\nasdfghjkl\nuser_123\njohn@mail.com\n")
-	got := runMenu(t,
-		"5", "2", "3", "0", // turn on save rejected and dry run
-		"1", "messy.txt",
-		"4", // info: nothing learned
-		"0",
-	)
-	for _, want := range []string{
-		"1 - Training   (dry run is on: nothing will be saved)",
-		"Dry run: would learn 1 new usernames",
-		"Nothing was saved.",
-		"Saved 3 rejected usernames, with reasons, to rejected_3.txt",
-		"Nothing learned yet",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("menu output missing %q:\n%s", want, got)
-		}
-	}
-	if _, err := os.Stat(defaultModel); err == nil {
-		t.Error("dry run saved a model")
-	}
-	data, _ := os.ReadFile("rejected_3.txt")
-	if want := "asdfghjkl\tkeyboard or alphabet sequence\nuser_123\tplaceholder or auto-generated\njohn@mail.com\tdisallowed character\n"; string(data) != want {
-		t.Errorf("rejected_3.txt = %q, want %q", data, want)
-	}
-	if tmp, _ := filepath.Glob(".rejected-*"); len(tmp) != 0 {
-		t.Errorf("temporary files left behind: %v", tmp)
-	}
-}
-
 func TestLoadSettings(t *testing.T) {
 	t.Chdir(t.TempDir())
 	if c, err := loadSettings("missing.json"); err != nil || c != defaultSettings() {
 		t.Errorf("missing file: %+v, %v; want defaults", c, err)
 	}
 	writeFile(t, "partial.json", `{"edits_per_username": 4}`)
-	if c, err := loadSettings("partial.json"); err != nil || c.EditsPerName != 4 || c.GenCount != defaultSettings().GenCount {
+	if c, err := loadSettings("partial.json"); err != nil || c.EditsPerName != 4 || c.Knowledge != bothKnowledge {
 		t.Errorf("partial file: %+v, %v", c, err)
 	}
 	for name, body := range map[string]string{
-		"garbage.json": "not json",
-		"invalid.json": `{"generate_min_length": 20, "generate_max_length": 5}`,
+		"garbage.json":   "not json",
+		"invalid.json":   `{"generate_min_length": 20, "generate_max_length": 5}`,
+		"knowledge.json": `{"knowledge": "everything"}`,
 	} {
 		writeFile(t, name, body)
 		if c, err := loadSettings(name); err == nil || c != defaultSettings() {
 			t.Errorf("%s: %+v, %v; want defaults and an error", name, c, err)
 		}
 	}
-	var out strings.Builder
 	writeFile(t, settingsFile, "not json")
-	if err := menu(strings.NewReader("0\n"), &out, settingsFile); err != nil || !strings.Contains(out.String(), "using default settings") {
-		t.Errorf("menu with bad settings: %v\n%s", err, out.String())
-	}
-}
-
-func TestMenuEditAsksLengths(t *testing.T) {
-	trainedDir(t)
-	writeFile(t, "mine.txt", "ShadowFox\nDarkWolf_7\nStormHawk99\nMysticPanda\n")
-	got := runMenu(t,
-		"1", "names.txt",
-		"2",
-		"2", "abc", "6", // shortest: out of range, not a number, then 6
-		"5", "10", // longest: below the shortest, then 10
-		"mine.txt",
-		"2", "", "", "mine.txt", // Enter keeps 6 and 10
-		"0",
-	)
-	for _, want := range []string{
-		"Shortest length (3-24) [3]: ",
-		"Enter a whole number from 3 to 24.",
-		"Longest length (6-24) [24]: ",
-		"Enter a whole number from 6 to 24.",
-		"Shortest length (3-24) [6]: ",
-		"Longest length (6-24) [10]: ",
-		"edited usernames (6-10 characters) to edited_",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("menu output missing %q:\n%s", want, got)
-		}
-	}
-	files, _ := filepath.Glob("edited_*.txt")
-	if len(files) != 2 {
-		t.Fatalf("edited files: %v", files)
-	}
-	for _, f := range files {
-		for _, ed := range readLines(t, f) {
-			if n := len([]rune(ed)); n < 6 || n > 10 {
-				t.Errorf("%s has %q (%d characters), want 6-10", f, ed, n)
-			}
-		}
-	}
-	if c, _ := loadSettings(settingsFile); c.EditMinLen != 6 || c.EditMaxLen != 10 {
-		t.Errorf("lengths not remembered: %d-%d", c.EditMinLen, c.EditMaxLen)
-	}
-}
-
-func TestMenuLearnBuiltin(t *testing.T) {
-	t.Chdir(t.TempDir())
-	writeFile(t, "mine.txt", "john.smith\njsmith92\nmaria.garcia1990\n")
-	got := runMenu(t,
-		"7", "9", "0", // invalid, then back
-		"7", "1", // learn email-style knowledge
-		"4",                     // info
-		"2", "", "", "mine.txt", // edit email-style names
-		"0",
-	)
-	for _, want := range []string{
-		"Which knowledge?",
-		"Choose 1, 2 or 3, or 0 to go back.",
-		"Training [██████████████████████████████] 100%",
-		"Learned ",
-		"Saved ",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("menu output missing %q:\n%s", want, got)
-		}
-	}
-	if strings.Count(got, "Which knowledge?") != 2 {
-		t.Errorf("expected two visits to the knowledge menu:\n%s", got)
-	}
-
-	// The model knows names and email structure, and edits in that style.
-	m, err := loadModel(defaultModel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if words := m.TopWords(1000); !slices.Contains(words, "smith") || !slices.Contains(words, "john") {
-		t.Errorf("email knowledge lacks common names: %v", words[:min(20, len(words))])
-	}
-	edited, _ := filepath.Glob("edited_*.txt")
-	if len(edited) != 1 {
-		t.Fatalf("edited files: %v", edited)
-	}
-	for _, ed := range readLines(t, edited[0]) {
-		if ed != strings.ToLower(ed) {
-			t.Errorf("email-style edit %q is not lowercase", ed)
-		}
-	}
-}
-
-func TestBuiltinCommandMatchesMenu(t *testing.T) {
-	t.Chdir(t.TempDir())
-	runMenu(t, "7", "3", "0")
-	fromMenu, err := loadModel(defaultModel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := builtin([]string{"-model", "cli.model", "-style", "both"}); err != nil {
-		t.Fatal(err)
-	}
-	fromCLI, err := loadModel("cli.model")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fromMenu.Stats() != fromCLI.Stats() || fromMenu.Patterns() != fromCLI.Patterns() {
-		t.Errorf("menu and command built different models: %+v vs %+v", fromMenu.Stats(), fromCLI.Stats())
-	}
-	if err := builtin([]string{"-style", "gamer"}); err == nil {
-		t.Error("builtin accepted an unknown style")
-	}
+	mustContain(t, runMenu(t, "0"), "using default settings")
 }

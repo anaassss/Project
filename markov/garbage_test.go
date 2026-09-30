@@ -123,3 +123,29 @@ func TestSplit(t *testing.T) {
 		}
 	}
 }
+
+func TestWordsMatchesSplit(t *testing.T) {
+	for _, name := range []string{
+		"ShadowWolf", "xXSniperXx", "Dark_Wolf_99", "XMLParser", "coolguy", "CyberPunk2077",
+		"john.doe", "", "Ünïcødé_Ωmega", "Влад_Крутой", "ThisNameIsLongerThanTwentyFourRunes_ok",
+	} {
+		var want, got []string
+		for _, seg := range Split(name) {
+			if seg.Kind == Word {
+				want = append(want, seg.Text)
+			}
+		}
+		for w := range Words(name) {
+			got = append(got, w)
+		}
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("Words(%q) = %v, want %v", name, got, want)
+		}
+	}
+	if n := testing.AllocsPerRun(100, func() {
+		for range Words("xXShadowWolf_99") {
+		}
+	}); n > 0 {
+		t.Errorf("Words allocated %v times", n)
+	}
+}

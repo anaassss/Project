@@ -1,5 +1,5 @@
-// Package edit rewrites usernames into new ones using what a markov.Model has
-// learned. For each username it tries four kinds of edit:
+// Package edit rewrites usernames into new ones using what one or more
+// markov.Models have learned. For each username it tries four kinds of edit:
 //
 //   - swap a word or number for one learned from other usernames
 //     (ShadowWolf → MidnightWolf)
@@ -8,10 +8,13 @@
 //   - let the model add a few characters to the end (ShadowWolf → ShadowWolf42)
 //   - drop a number (MysticPanda99 → MysticPanda)
 //
-// The model only writes from patterns it has actually seen, any new word it
-// writes must be made of words it learned (markov.Model.WordLike), and every
-// edit must pass markov.Check. A username gets fewer edits when the model knows
-// less that fits it. Run edits millions of usernames using every CPU core.
+// With several models, each username is edited with the ones that know its
+// words best, so an email-style name is edited with email knowledge and a
+// gaming name with gaming knowledge. A model only writes from patterns it
+// has actually seen, any new word it writes must be made of words it learned
+// (markov.Model.WordLike), and every edit must pass markov.Check. A username
+// gets fewer edits when the models know less that fits it. Run edits
+// millions of usernames using every CPU core.
 package edit
 
 import (
@@ -40,36 +43,54 @@ const (
 	maxGrowth = 4
 	// attemptsPerEdit bounds the work per username when few edits exist.
 	attemptsPerEdit = 4
+	// allSamples is how many rewrites and extensions each model tries per
+	// username when Max is 0; swaps are then tried exhaustively.
+	allSamples = 200
 	// batchSize is how many usernames a worker edits at a time.
 	batchSize = 1024
 )
 
 // Options controls editing.
 type Options struct {
-	Max        int  // most edits per username
-	AllowKnown bool // allow edits that are usernames the model learned from
+	// Max is the most edits per username. 0 means every edit the knowledge
+	// allows: every learned word or number swapped into every part, plus
+	// whatever the models write in allSamples tries each.
+	Max        int
+	AllowKnown bool // allow edits that are usernames a model learned from
 
 	// MinLen and MaxLen bound every edit's length in characters. Zero means
 	// markov.MinNameLen and markov.MaxNameLen, the garbage filter's limits.
 	MinLen, MaxLen int
 }
 
-// Editor edits usernames with one model. It is safe for concurrent use.
+// Editor edits usernames with one or more models. It is safe for concurrent
+// use.
 type Editor struct {
-	m       *markov.Model
+	sources []source
 	opts    Options
+}
+
+// source is one model and the vocabulary swapped in from it.
+type source struct {
+	m       *markov.Model
 	words   []string // learned words, lowercased, most common first
 	numbers []string // learned numbers, most common first
 }
 
-// New prepares an Editor. It returns an error if the model has learned
-// nothing or opts.Max is not positive.
-func New(m *markov.Model, opts Options) (*Editor, error) {
-	if m.Stats().Names == 0 {
-		return nil, errors.New("model has not learned any usernames yet")
+// New prepares an Editor from the models that have learned something. It
+// returns an error if none have, or if opts is invalid.
+func New(models []*markov.Model, opts Options) (*Editor, error) {
+	var sources []source
+	for _, m := range models {
+		if m != nil && m.Stats().Names > 0 {
+			sources = append(sources, source{m, m.TopWords(vocabWords), m.TopNumbers(vocabNumbers)})
+		}
 	}
-	if opts.Max < 1 {
-		return nil, errors.New("edits per username must be at least 1")
+	if len(sources) == 0 {
+		return nil, errors.New("nothing has been learned yet")
+	}
+	if opts.Max < 0 {
+		return nil, errors.New("edits per username must be 0 (every edit) or more")
 	}
 	if opts.MinLen == 0 {
 		opts.MinLen = markov.MinNameLen
@@ -81,31 +102,86 @@ func New(m *markov.Model, opts Options) (*Editor, error) {
 		return nil, fmt.Errorf("lengths must be %d-%d with the shortest no longer than the longest, got %d-%d",
 			markov.MinNameLen, markov.MaxNameLen, opts.MinLen, opts.MaxLen)
 	}
-	return &Editor{
-		m:       m,
-		opts:    opts,
-		words:   m.TopWords(vocabWords),
-		numbers: m.TopNumbers(vocabNumbers),
-	}, nil
+	return &Editor{sources: sources, opts: opts}, nil
 }
 
-// Edit appends up to Max distinct edits of name, each MinLen-MaxLen
-// characters long, to dst and returns it.
+// fitting returns the sources that know the most of the words in segs, or
+// all of them if none knows any.
+func (e *Editor) fitting(segs []markov.Segment) []source {
+	if len(e.sources) == 1 {
+		return e.sources
+	}
+	scores := make([]int, len(e.sources))
+	best := 0
+	for i, src := range e.sources {
+		for _, seg := range segs {
+			if seg.Kind == markov.Word && utf8.RuneCountInString(seg.Text) >= 2 && src.m.KnowsWord(seg.Text) {
+				scores[i]++
+			}
+		}
+		best = max(best, scores[i])
+	}
+	if best == 0 {
+		return e.sources
+	}
+	var out []source
+	for i, src := range e.sources {
+		if scores[i] == best {
+			out = append(out, src)
+		}
+	}
+	return out
+}
+
+// hashSet holds the fingerprints of one username's edits: a slice while
+// small, a map once there are many (when Max is 0).
+type hashSet struct {
+	list []uint64
+	m    map[uint64]struct{}
+}
+
+func (s *hashSet) has(h uint64) bool {
+	if s.m != nil {
+		_, ok := s.m[h]
+		return ok
+	}
+	return slices.Contains(s.list, h)
+}
+
+func (s *hashSet) add(h uint64) {
+	if s.m != nil {
+		s.m[h] = struct{}{}
+		return
+	}
+	if s.list = append(s.list, h); len(s.list) > 32 {
+		s.m = make(map[uint64]struct{}, 2*len(s.list))
+		for _, x := range s.list {
+			s.m[x] = struct{}{}
+		}
+	}
+}
+
+// Edit appends distinct edits of name, each MinLen-MaxLen characters long,
+// to dst and returns it: up to Max of them, or every one the knowledge
+// allows if Max is 0.
 func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 	start := len(dst)
 	// FoldHash identifies a candidate for every duplicate check; Check, the
 	// costliest test, runs last.
-	hashes := make([]uint64, 1, e.opts.Max+1)
-	hashes[0] = markov.FoldHash(name)
+	var seen hashSet
+	seen.add(markov.FoldHash(name))
 	add := func(cand string) {
 		if n := utf8.RuneCountInString(cand); n < e.opts.MinLen || n > e.opts.MaxLen {
 			return
 		}
 		h := markov.FoldHash(cand)
-		if slices.Contains(hashes, h) || (!e.opts.AllowKnown && e.m.KnowsHash(h)) || markov.Check(cand) != nil {
+		if seen.has(h) || (!e.opts.AllowKnown && slices.ContainsFunc(e.sources, func(s source) bool { return s.m.KnowsHash(h) })) {
 			return
 		}
-		hashes = append(hashes, h)
+		if markov.Check(cand) != nil {
+			return
+		}
+		seen.add(h)
 		dst = append(dst, cand)
 	}
 
@@ -150,51 +226,77 @@ func (e *Editor) Edit(rng *rand.Rand, name string, dst []string) []string {
 		}
 	}
 
-	// Words the model writes must be words it learned; the name's own
-	// words are kept as they are.
-	own := map[string]bool{}
+	// Words a model writes must be words it learned; the name's own words
+	// are kept as they are.
+	var own []string
 	for _, seg := range segs {
 		if seg.Kind == markov.Word {
-			own[strings.ToLower(seg.Text)] = true
+			own = append(own, seg.Text)
 		}
 	}
-	addWritten := func(cand string) {
-		for _, seg := range markov.Split(cand) {
-			if seg.Kind == markov.Word && !own[strings.ToLower(seg.Text)] && !e.m.WordLike(seg.Text) {
-				return
+	write := func(src source, prefix string) {
+		cand, ok := src.m.Complete(rng, prefix, maxLen)
+		if !ok {
+			return
+		}
+		// Prefixes end at a word boundary, so if only digits and separators
+		// were written, every word is one of the name's own.
+		if strings.IndexFunc(cand[len(prefix):], unicode.IsLetter) >= 0 {
+			for w := range markov.Words(cand) {
+				if !slices.ContainsFunc(own, func(o string) bool { return strings.EqualFold(o, w) }) && !src.m.WordLike(w) {
+					return
+				}
 			}
 		}
 		add(cand)
 	}
+	vocabFor := func(src source, i int) []string {
+		if segs[i].Kind == markov.Number {
+			return src.numbers
+		}
+		return src.words
+	}
 
-	for try := 0; len(dst)-start < e.opts.Max && try < e.opts.Max*attemptsPerEdit; try++ {
-		switch try % 4 {
+	sources := e.fitting(segs)
+	if e.opts.Max == 0 {
+		for _, src := range sources {
+			for _, i := range swappable {
+				for _, v := range vocabFor(src, i) {
+					if !strings.EqualFold(v, segs[i].Text) {
+						add(join(segs, i, v, styles[i]))
+					}
+				}
+			}
+			for range allSamples {
+				if len(cuts) > 0 {
+					write(src, string(runes[:cuts[rng.IntN(len(cuts))]]))
+				}
+				write(src, name)
+			}
+		}
+		return dst
+	}
+
+	tries := e.opts.Max * attemptsPerEdit * len(sources)
+	for try := 0; len(dst)-start < e.opts.Max && try < tries; try++ {
+		src := sources[try%len(sources)]
+		switch try / len(sources) % 4 {
 		case 0, 2: // swap
 			if len(swappable) == 0 {
 				continue
 			}
 			i := swappable[rng.IntN(len(swappable))]
-			vocab := e.words
-			if segs[i].Kind == markov.Number {
-				vocab = e.numbers
-			}
-			if len(vocab) > 0 {
+			if vocab := vocabFor(src, i); len(vocab) > 0 {
 				if v := vocab[rng.IntN(len(vocab))]; !strings.EqualFold(v, segs[i].Text) {
 					add(join(segs, i, v, styles[i]))
 				}
 			}
 		case 1: // rewrite the ending
-			if len(cuts) == 0 {
-				continue
-			}
-			cut := cuts[rng.IntN(len(cuts))]
-			if cand, ok := e.m.Complete(rng, string(runes[:cut]), maxLen); ok {
-				addWritten(cand)
+			if len(cuts) > 0 {
+				write(src, string(runes[:cuts[rng.IntN(len(cuts))]]))
 			}
 		case 3: // extend
-			if cand, ok := e.m.Complete(rng, name, maxLen); ok {
-				addWritten(cand)
-			}
+			write(src, name)
 		}
 	}
 	return dst

@@ -32,11 +32,16 @@ func model(t *testing.T) *markov.Model {
 
 func editor(t *testing.T, opts Options) *Editor {
 	t.Helper()
-	e, err := New(model(t), opts)
+	e, err := New([]*markov.Model{model(t)}, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return e
+}
+
+// knows reports whether any of e's models learned name.
+func (e *Editor) knows(name string) bool {
+	return slices.ContainsFunc(e.sources, func(s source) bool { return s.m.Knows(name) })
 }
 
 func rng() *rand.Rand { return rand.New(rand.NewPCG(1, 2)) }
@@ -59,7 +64,7 @@ func TestEditProducesGoodDistinctEdits(t *testing.T) {
 				t.Errorf("Edit(%q) returned the name itself", name)
 			case seen[key]:
 				t.Errorf("Edit(%q) returned %q twice", name, ed)
-			case e.m.Knows(ed):
+			case e.knows(ed):
 				t.Errorf("Edit(%q) returned learned name %q", name, ed)
 			case markov.Check(ed) != nil:
 				t.Errorf("Edit(%q) returned garbage %q", name, ed)
@@ -82,7 +87,7 @@ func TestEditUsesLearnedParts(t *testing.T) {
 	edits := e.Edit(rng(), "ShadowFox", nil)
 	swapped := slices.ContainsFunc(edits, func(ed string) bool {
 		rest, ok := strings.CutPrefix(ed, "Shadow")
-		return ok && slices.Contains(e.words, strings.ToLower(rest))
+		return ok && slices.Contains(e.sources[0].words, strings.ToLower(rest))
 	})
 	if !swapped {
 		t.Errorf("Edit(ShadowFox) = %v, want a learned word swapped in", edits)
@@ -96,7 +101,7 @@ func TestEditAllowKnown(t *testing.T) {
 	strict := editor(t, Options{Max: 40})
 	loose := editor(t, Options{Max: 40, AllowKnown: true})
 	knownIn := func(e *Editor) bool {
-		return slices.ContainsFunc(e.Edit(rng(), "ShadowFox", nil), e.m.Knows)
+		return slices.ContainsFunc(e.Edit(rng(), "ShadowFox", nil), e.knows)
 	}
 	if knownIn(strict) {
 		t.Error("learned names returned without AllowKnown")
@@ -157,11 +162,11 @@ func TestRun(t *testing.T) {
 
 func TestNewRejectsBadInput(t *testing.T) {
 	empty, _ := markov.New(3)
-	if _, err := New(empty, Options{Max: 5}); err == nil {
-		t.Error("New accepted an empty model")
+	if _, err := New([]*markov.Model{empty, nil}, Options{Max: 5}); err == nil {
+		t.Error("New accepted models that know nothing")
 	}
-	if _, err := New(model(t), Options{Max: 0}); err == nil {
-		t.Error("New accepted Max 0")
+	if _, err := New([]*markov.Model{model(t)}, Options{Max: -1}); err == nil {
+		t.Error("New accepted Max -1")
 	}
 }
 
@@ -223,7 +228,7 @@ func TestNewRejectsBadLengths(t *testing.T) {
 		{Max: 5, MinLen: 5, MaxLen: 25},
 		{Max: 5, MinLen: 10, MaxLen: 6},
 	} {
-		if _, err := New(model(t), o); err == nil {
+		if _, err := New([]*markov.Model{model(t)}, o); err == nil {
 			t.Errorf("New accepted lengths %d-%d", o.MinLen, o.MaxLen)
 		}
 	}
@@ -235,5 +240,67 @@ func TestEditDeclinesUnreachableLengths(t *testing.T) {
 	e := editor(t, Options{Max: 10, MinLen: 12, MaxLen: 20})
 	if edits := e.Edit(rng(), "IronFox", nil); len(edits) != 0 {
 		t.Errorf("Edit(IronFox) within 12-20 = %v, want none", edits)
+	}
+}
+
+func TestEditPicksFittingKnowledge(t *testing.T) {
+	em, _ := markov.New(3)
+	gm, _ := markov.New(3)
+	first := strings.Fields("john maria juan sarah mike david emma lucas nora omar ivan mei raj ana leo sam kate ben lily max owen zoe ali eva tom")
+	last := strings.Fields("smith garcia baker lee jones brown silva khan chen park wood hill king ford hale ross moss nash reed lowe cole dunn fox gray hunt")
+	adj := strings.Fields("silent dark happy lazy swift brave wild noble cosmic lunar solar frosty sneaky mighty tiny fuzzy misty royal rapid epic")
+	noun := strings.Fields("wolf panda tiger dragon raven hawk falcon eagle bear lion shark viper ninja knight wizard ranger hunter pilot rider storm")
+	for i := range first {
+		em.Learn(first[i] + "." + last[i])
+		em.Learn(first[(i+3)%len(first)] + "_" + last[(i+7)%len(last)])
+	}
+	for i := range adj {
+		for j := range 3 {
+			gm.Learn(strings.ToUpper(adj[i][:1]) + adj[i][1:] + strings.ToUpper(noun[(i+j)%len(noun)][:1]) + noun[(i+j)%len(noun)][1:])
+		}
+	}
+	e, err := New([]*markov.Model{em, gm}, Options{Max: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasWordFrom := func(name string, list []string) bool {
+		return slices.ContainsFunc(markov.Split(name), func(seg markov.Segment) bool {
+			return slices.Contains(list, strings.ToLower(seg.Text))
+		})
+	}
+	for _, ed := range e.Edit(rng(), "john.smith", nil) {
+		if hasWordFrom(ed, adj) || hasWordFrom(ed, noun) {
+			t.Errorf("email-style name got a gaming word: %q", ed)
+		}
+	}
+	for _, ed := range e.Edit(rng(), "SilentWolf", nil) {
+		if hasWordFrom(ed, first) || hasWordFrom(ed, last) {
+			t.Errorf("gaming name got an email word: %q", ed)
+		}
+	}
+}
+
+func TestEditEverything(t *testing.T) {
+	e := editor(t, Options{Max: 0})
+	all := e.Edit(rng(), "ShadowFox", nil)
+	some := editor(t, Options{Max: 10}).Edit(rng(), "ShadowFox", nil)
+	if len(all) <= len(some) {
+		t.Errorf("Max 0 gave %d edits, no more than Max 10's %d", len(all), len(some))
+	}
+	seen := map[string]bool{}
+	for _, ed := range all {
+		key := strings.ToLower(ed)
+		if seen[key] {
+			t.Errorf("Max 0 returned %q twice", ed)
+		}
+		seen[key] = true
+	}
+	// Every learned word swapped into each part is among the edits.
+	for _, w := range e.sources[0].words {
+		for _, cand := range []string{"Shadow" + strings.ToUpper(w[:1]) + w[1:], strings.ToUpper(w[:1]) + w[1:] + "Fox"} {
+			if !seen[strings.ToLower(cand)] && markov.Check(cand) == nil && !e.knows(cand) && !strings.EqualFold(cand, "ShadowFox") {
+				t.Errorf("Max 0 missed the swap %q", cand)
+			}
+		}
 	}
 }

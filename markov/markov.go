@@ -312,6 +312,12 @@ func (m *Model) WordLike(word string) bool {
 	if len(m.words) < minWordsToJudge || utf8.RuneCountInString(word) < 2 {
 		return true
 	}
+	return m.KnowsWord(word)
+}
+
+// KnowsWord reports whether word is made of words the model learned, as
+// WordLike describes, however few words the model knows.
+func (m *Model) KnowsWord(word string) bool {
 	w := strings.ToLower(word)
 	if m.compound(w) {
 		return true
