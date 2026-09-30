@@ -156,6 +156,7 @@ func TestUnique(t *testing.T) {
 		"mike.and.jess": false, "noah_gamer": false, "emmagirl": false, "johnkevin": false,
 		"maya.thorne": true, "brandyholt": true, "theodore": true, "lilian4410": true,
 		"itsuki.mori": true, "tariq_0912": true, "NovaTV": false, "pizzamantv": false,
+		"tacoman2004": false, "super1749": false, "epic.panda": false, "coleman4471": true, "tobias.king": true,
 	} {
 		if got := Unique(name); got != want {
 			t.Errorf("Unique(%q) = %v, want %v", name, got, want)
@@ -168,6 +169,9 @@ func TestTrimJoined(t *testing.T) {
 		"itsmike": "mike", "noahplayz": "noah", "lilzara": "zara", "mrsmith": "smith",
 		"xxshadow": "shadow", "ItsMike": "mike", "lilian": "lilian", "theo": "theo", "maya": "maya",
 		"mrsjones": "jones", "mrbiscuit": "biscuit", "leoboy": "leo", "coleman": "coleman",
+		"tacoman": "taco", "pandaking": "panda", "rocketkid": "rocket", "tacopro": "taco",
+		"thebiscuit": "biscuit", "bigwaffle": "waffle", "superwaffle": "waffle",
+		"samking": "samking", "feldman": "feldman", "theresa": "theresa", "theodore": "theodore",
 	} {
 		if got := TrimJoined(word); got != want {
 			t.Errorf("TrimJoined(%q) = %q, want %q", word, got, want)

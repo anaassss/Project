@@ -213,7 +213,7 @@ lawrence black mills grant knight rose stone hawkins dunn perkins hudson
 spencer
 `)
 
-// rareLastNames lists less common last names from many countries (1377).
+// rareLastNames lists less common last names from many countries (1401).
 var rareLastNames = strings.Fields(`
 gardner stephens payne pierce berry matthews arnold wagner willis ray
 watkins olson carroll duncan snyder hart cunningham bradley lane andrews
@@ -347,8 +347,10 @@ navarrete ochoa olvera orozco pacheco palacios quintero rangel robles
 salinas sepulveda solis tapia trevino urbina valencia villarreal zamora
 zavala arellano beltran cordero bergstrom dahl ekman engstrom falk hagen
 lindgren lundqvist nygaard sandberg sjoberg strand wahl popescu radu stanek
-kovacs szabo nagy toth varga callahan carney cleary connolly costello cullen
-donnelly egan fahey finnegan flanagan flynn hanlon hennessy kavanagh keane
-kinsella mahoney mcnamara molloy moriarty mullen nagle phelan quinlan
-riordan scanlon sheehan tierney whelan
+kovacs szabo nagy toth varga akerman ackerman kaufman hartman lehman feldman
+goldman silverman beckman eastman tillman whitman portman stedman lindeman
+heyman hyman bauman workman waltman lowman herman bigelow hawking callahan
+carney cleary connolly costello cullen donnelly egan fahey finnegan flanagan
+flynn hanlon hennessy kavanagh keane kinsella mahoney mcnamara molloy
+moriarty mullen nagle phelan quinlan riordan scanlon sheehan tierney whelan
 `)

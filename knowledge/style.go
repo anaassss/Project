@@ -24,21 +24,27 @@ var (
 	common = set(commonFirstNames, commonLastNames)
 
 	// decorations are words people put around a name rather than in it:
-	// prefixes (its, lil, mr), suffixes (playz, boi, mom), wrappers (xx,
-	// xo) and web endings (io, png).
+	// prefixes (its, lil, mr, super), suffixes (playz, boi, mom), wrappers
+	// (xx, xo) and web endings (io, png).
 	decorations = set(strings.Fields(`
 		its iam im mr mrs ms miss lil little big the real just hey not my get
-		official sir lord dj xx xo xd yt ttv tv hd gg lol io exe png jpg com co
-		www playz plays gamer gaming games live pro boi boy girl kid dude bro guy
-		man mom mum mama mommy dad daddy papa and`))
+		official super epic mega ultra sir lord dj xx xo xd yt ttv tv hd gg lol
+		io exe png jpg com co www playz plays gamer gaming games live pro boi
+		boy girl kid dude bro guy man queen mom mum mama mommy dad daddy papa
+		and`))
 
-	// Decorations run into a name. Some start names too (theo, lilian), so
-	// they come off only before a name of 4+ letters...
-	namePrefixes = []string{"miss", "mrs", "real", "lil", "the", "mr"}
-	// ... and no name starts or ends with these, so they come off whenever
-	// 4+ letters follow or 3+ come before.
-	joinedPrefixes = []string{"official", "its", "iam", "xx", "mr"}
-	joinedSuffixes = []string{"official", "playz", "plays", "gaming", "gamer", "mommy", "daddy", "mama", "girl", "boi", "boy", "ttv", "tv", "hd", "xx", "xd", "yt"}
+	// Decorations run into a name. Some start names too (lilian), so they
+	// come off only before a name of 4+ letters...
+	namePrefixes = []string{"miss", "mrs", "real", "lil", "mr"}
+	// ... and these start no name, so they come off whenever 4+ letters
+	// follow ("the" only before letters that start no name after it, unlike
+	// theodore, thea, thelma and theresa).
+	joinedPrefixes = []string{"official", "super", "epic", "its", "iam", "big", "the", "xx", "mr"}
+	// These end no name, so they come off whenever 3+ letters come before...
+	joinedSuffixes = []string{"official", "playz", "plays", "gaming", "gamer", "mommy", "daddy", "mama", "live", "girl", "boi", "boy", "kid", "bro", "pro", "ttv", "tv", "hd", "xx", "xd", "yt"}
+	// ... and these end surnames too (coleman, freeman, samking), so they
+	// come off only when what comes before isn't a name.
+	nameSuffixes = []string{"man", "king"}
 )
 
 // Decoration reports whether word is one people put around a name rather
@@ -46,10 +52,14 @@ var (
 func Decoration(word string) bool { return decorations[strings.ToLower(word)] }
 
 // TrimJoined takes a decoration run into a word off it: itsmike → mike,
-// noahplayz → noah, lilzara → zara. It returns word, lowercased, if there
-// is none.
+// noahplayz → noah, lilzara → zara, thebiscuit → biscuit, tacoman → taco.
+// It returns word, lowercased, if there is none, and always for a known
+// name (coleman, theresa).
 func TrimJoined(word string) string {
 	w := strings.ToLower(word)
+	if names[w] {
+		return w
+	}
 	trimmed := false
 	for _, p := range namePrefixes {
 		if rest, ok := strings.CutPrefix(w, p); ok && len(rest) >= 4 && names[rest] {
@@ -58,15 +68,20 @@ func TrimJoined(word string) string {
 		}
 	}
 	for _, p := range joinedPrefixes {
-		if rest, ok := strings.CutPrefix(w, p); ok && !trimmed && len(rest) >= 4 {
+		rest, ok := strings.CutPrefix(w, p)
+		if ok && !trimmed && len(rest) >= 4 && (p != "the" || strings.IndexByte("oalr", rest[0]) < 0) {
 			w = rest
 			break
 		}
 	}
 	for _, s := range joinedSuffixes {
 		if rest, ok := strings.CutSuffix(w, s); ok && len(rest) >= 3 {
-			w = rest
-			break
+			return rest
+		}
+	}
+	for _, s := range nameSuffixes {
+		if rest, ok := strings.CutSuffix(w, s); ok && len(rest) >= 3 && !names[rest] {
+			return rest
 		}
 	}
 	return w

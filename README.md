@@ -112,9 +112,12 @@ tags. So while **Unique email style** is on (it is by default), everything
 Edit and Generate make, from either knowledge:
 
 - is lowercase;
-- has no decorations: they are taken off each username before it is edited
-  (`its.Mike_99` → `mike_99`, `xXShadowXx` → `shadow`, `noahplayz` → `noah`),
-  and edits that would have them are dropped;
+- has no decorations (prefixes like `its`, `lil`, `mr`, `the`, `super`,
+  suffixes like `playz`, `boi`, `kid`, `pro`, `man`, `mom`, `tv`, wrappers
+  like `xX…Xx`, endings like `.io`): they are taken off each username before
+  it is edited (`its.Mike_99` → `mike_99`, `xXShadowXx` → `shadow`,
+  `tacoman2004` → `taco2004`), and edits that would have them are dropped.
+  Names are left alone, so `coleman`, `theresa` and `samking` stay;
 - is not plain: not a name on its own (`stefan`), not a very common name
   with a birth year or up to two digits (`emma2008`, `john92`), and not two
   very common names or an initial and one (`johnkevin`, `john.smith`,
